@@ -20,8 +20,9 @@ features:
 train:
 	$(PYTHON) scripts/train_models.py
 
-tune:
-	$(PYTHON) scripts/hyperparameter_tuning.py
+# tune target requires scripts/hyperparameter_tuning.py (not yet implemented)
+# tune:
+# 	$(PYTHON) scripts/hyperparameter_tuning.py
 
 evaluate:
 	$(PYTHON) scripts/evaluate.py
