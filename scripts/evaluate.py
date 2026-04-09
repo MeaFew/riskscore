@@ -32,6 +32,7 @@ from config import (
     IMAGES_DIR,
     MODEL_PATH,
     MODEL_RESULTS_JSON,
+    MODELS_DIR,
     RANDOM_STATE,
     REPORTS_DIR,
     TARGET_COL,
@@ -196,12 +197,35 @@ def main():
         results = json.load(f)
     best_name = results.get("best_model", "xgboost")
 
-    # train_models.py saves all models as .joblib (pickle-compatible)
-    model_path = MODELS_DIR / f"{best_name}_risk_model.joblib"
-    if not model_path.exists():
-        # Fallback to xgboost
-        model_path = MODELS_DIR / "xgboost_risk_model.joblib"
-    model = joblib.load(str(model_path))
+    # Auto-detect model file: try .json (XGBoost native), then .joblib, then glob
+    model_path = None
+    for ext in (".json", ".joblib"):
+        candidate = MODEL_PATH.with_suffix(ext)
+        if candidate.exists():
+            model_path = candidate
+            break
+    if model_path is None:
+        # Try best_name-based naming convention
+        for ext in (".json", ".joblib"):
+            candidate = MODELS_DIR / f"{best_name}_risk_model{ext}"
+            if candidate.exists():
+                model_path = candidate
+                break
+    if model_path is None:
+        # Last resort: any model file in MODELS_DIR
+        candidates = list(MODELS_DIR.glob("*_risk_model.*"))
+        if candidates:
+            model_path = candidates[0]
+        else:
+            raise FileNotFoundError(f"No model file found in {MODELS_DIR}")
+
+    if model_path.suffix == ".json":
+        import xgboost as xgb
+        model = xgb.XGBClassifier()
+        model.load_model(str(model_path))
+    else:
+        model = joblib.load(str(model_path))
+    print(f"Loaded model from {model_path}")
 
     # Retrain on full train for evaluation
     print("Retraining on full training set for evaluation ...")

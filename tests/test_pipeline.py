@@ -87,3 +87,49 @@ class TestEndToEnd:
         train_features, test_features = build_features(train_clean, test_clean)
         assert train_features.shape[0] == mock_train_df.shape[0]
         assert test_features.shape[0] == mock_test_df.shape[0]
+
+
+class TestFeatureOutputValidity:
+    """P2-12: Tests that cover meaningful pipeline validation."""
+
+    def test_build_features_has_expected_columns(self, mock_train_df, mock_test_df):
+        """Feature engineering output must include SK_ID_CURR, TARGET, and ratio features."""
+        train_clean, test_clean = preprocess(mock_train_df, mock_test_df)
+        train_features, test_features = build_features(train_clean, test_clean)
+
+        assert "SK_ID_CURR" in train_features.columns
+        assert "SK_ID_CURR" in test_features.columns
+        assert TARGET_COL in train_features.columns
+        assert TARGET_COL not in test_features.columns
+
+        # Ratio features should be created when source columns exist
+        if "AMT_CREDIT" in train_clean.columns and "AMT_INCOME_TOTAL" in train_clean.columns:
+            assert "CREDIT_TO_INCOME_RATIO" in train_features.columns
+        if "DAYS_BIRTH" in train_clean.columns:
+            assert "AGE_YEARS" in train_features.columns
+
+        # EXT_SOURCE interaction features
+        source_cols = [c for c in train_features.columns if c.startswith("EXT_SOURCE_")]
+        assert len(source_cols) > 0, "Should have at least some EXT_SOURCE columns"
+
+    def test_default_rate_in_valid_range(self, mock_train_df):
+        """Training data default rate must be between 0% and 20%."""
+        default_rate = mock_train_df[TARGET_COL].mean()
+        assert 0.0 <= default_rate <= 0.20, (
+            f"Default rate {default_rate:.4f} outside valid range [0, 0.20]"
+        )
+
+    def test_preprocessed_data_no_nan_in_key_columns(self, mock_train_df, mock_test_df):
+        """Preprocessed training data must have no NaN in numeric key columns."""
+        train_clean, test_clean = preprocess(mock_train_df, mock_test_df)
+
+        key_cols = [
+            c for c in ["AMT_CREDIT", "AMT_INCOME_TOTAL", "AMT_ANNUITY",
+                         "DAYS_BIRTH", "DAYS_EMPLOYED", "EXT_SOURCE_1",
+                         "EXT_SOURCE_2", "EXT_SOURCE_3"]
+            if c in train_clean.columns
+        ]
+
+        for col in key_cols:
+            assert train_clean[col].isna().sum() == 0, f"NaN found in {col} after preprocessing"
+            assert test_clean[col].isna().sum() == 0, f"NaN found in {col} after preprocessing"
