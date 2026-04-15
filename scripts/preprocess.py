@@ -17,7 +17,6 @@ from config import (
     CLEANED_TEST_CSV,
     CLEANED_TRAIN_CSV,
     PROCESSED_DATA_DIR,
-    RANDOM_STATE,
     TARGET_COL,
     TEST_CSV,
     TRAIN_CSV,

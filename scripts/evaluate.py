@@ -36,6 +36,7 @@ from config import (
     RANDOM_STATE,
     REPORTS_DIR,
     TARGET_COL,
+    ks_score,
 )
 
 
@@ -159,14 +160,6 @@ def evaluate_model(model, X_test, y_test):
     return metrics
 
 
-def ks_score(y_true, y_proba):
-    """Compute KS statistic."""
-    from scipy import stats
-    pos = y_proba[y_true == 1]
-    neg = y_proba[y_true == 0]
-    return stats.ks_2samp(pos, neg).statistic
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--train", type=Path, default=FEATURES_TRAIN_CSV)
@@ -192,21 +185,31 @@ def main():
             X_train, y_train, test_size=0.2, random_state=RANDOM_STATE, stratify=y_train
         )
 
-    # Load best model from CV results
+    # Load best model from CV results (read JSON once)
     with open(MODEL_RESULTS_JSON, "r") as f:
         results = json.load(f)
     best_name = results.get("best_model", "xgboost")
 
-    # Auto-detect model file: try .json (XGBoost native), then .joblib, then glob
+    # Auto-detect model file: try based on best_model type
+    # For XGBoost, prefer native .json; for others, always use .joblib
     model_path = None
-    for ext in (".json", ".joblib"):
-        candidate = MODEL_PATH.with_suffix(ext)
-        if candidate.exists():
-            model_path = candidate
-            break
+    if best_name == "xgboost":
+        # Try native .json first for XGBoost
+        for ext in (".json", ".joblib"):
+            candidate = MODEL_PATH.with_suffix(ext)
+            if candidate.exists():
+                model_path = candidate
+                break
+    else:
+        # Prefer .joblib for all other model types (avoids native-format load failures)
+        for ext in (".joblib", ".json"):
+            candidate = MODEL_PATH.with_suffix(ext)
+            if candidate.exists():
+                model_path = candidate
+                break
     if model_path is None:
         # Try best_name-based naming convention
-        for ext in (".json", ".joblib"):
+        for ext in (".joblib", ".json"):
             candidate = MODELS_DIR / f"{best_name}_risk_model{ext}"
             if candidate.exists():
                 model_path = candidate
@@ -229,10 +232,8 @@ def main():
 
     metrics = evaluate_model(model, X_test, y_test)
 
-    # Save results
+    # Save results (reuse already-loaded results dict)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(MODEL_RESULTS_JSON, "r") as f:
-        results = json.load(f)
     results["test_metrics"] = metrics
     with open(MODEL_RESULTS_JSON, "w") as f:
         json.dump(results, f, indent=2)

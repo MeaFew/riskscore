@@ -88,6 +88,7 @@ models/*.json
 # Reports / outputs
 reports/*.json
 reports/*.md
+reports/*.html
 !reports/.gitkeep
 
 # Images

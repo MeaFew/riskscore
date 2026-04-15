@@ -40,9 +40,19 @@ def merge_aux_features():
     test_merged = test_df.merge(aux_df, on="SK_ID_CURR", how="left")
     test_merged = test_merged.fillna(0)
 
-    # Save (overwrite)
-    train_merged.to_csv(train_path, index=False)
-    test_merged.to_csv(test_path, index=False)
+    # Save atomically via temp files to avoid corruption on mid-write failure
+    import os
+    import tempfile
+    for path, df in [(train_path, train_merged), (test_path, test_merged)]:
+        fd, tmp = tempfile.mkstemp(suffix=".csv", prefix="features_", dir=path.parent)
+        os.close(fd)
+        try:
+            df.to_csv(tmp, index=False)
+            os.replace(tmp, path)
+        except Exception:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
 
     print(f"\nDone. Train now: {len(train_merged):,} rows × {len(train_merged.columns)} cols")
     print(f"      Test now: {len(test_merged):,} rows × {len(test_merged.columns)} cols")

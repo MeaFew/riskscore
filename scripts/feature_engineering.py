@@ -26,7 +26,6 @@ from config import (
     FEATURES_TRAIN_CSV,
     IV_THRESHOLD,
     PROCESSED_DATA_DIR,
-    RANDOM_STATE,
     TARGET_COL,
     WOE_MAX_BINS,
 )
@@ -70,15 +69,6 @@ def compute_woe_iv(df: pd.DataFrame, feature: str, target: str, n_bins: int = WO
     iv = grouped["iv"].sum()
     return grouped[["woe", "iv"]], iv
 
-
-def identity_transform(df: pd.DataFrame, feature: str, woe_map: pd.DataFrame) -> pd.Series:
-    """Placeholder: returns raw feature values unchanged.
-
-    WOE encoding is most useful for logistic regression models.
-    Tree-based models (XGBoost/LightGBM) handle non-linear relationships
-    natively, so WOE transform is skipped for now.
-    """
-    return df[feature]
 
 
 def compute_iv_all(df: pd.DataFrame, numeric_cols: list[str], target: str = TARGET_COL) -> pd.DataFrame:

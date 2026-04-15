@@ -19,7 +19,7 @@ import shap
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import (
-    FEATURES_TEST_CSV,
+    FEATURES_TEST_CSV,  # only used as argparse default for --test
     FEATURES_TRAIN_CSV,
     IMAGES_DIR,
     MODEL_PATH,
@@ -52,12 +52,17 @@ def load_model():
         candidates = list(MODEL_PATH.parent.glob("*_risk_model.*"))
         if candidates:
             p = candidates[0]
-            if p.suffix == ".json":
+            # Only attempt XGBoost native loading for .json if best_model is xgboost
+            if best_name == "xgboost" and p.suffix == ".json":
                 import xgboost as xgb
                 model = xgb.XGBClassifier()
                 model.load_model(str(p))
                 return model
-            return joblib.load(str(p))
+            elif p.suffix == ".joblib":
+                return joblib.load(str(p))
+            else:
+                # Non-xgboost .json files can't be loaded here; prefer .joblib
+                raise FileNotFoundError(f"No compatible model file found for stem {MODEL_PATH}")
         raise FileNotFoundError(f"No model file found for stem {MODEL_PATH}")
 
 
@@ -110,16 +115,11 @@ def main():
 
     print("Loading data ...")
     train_df = pd.read_csv(args.train)
-
-    y_train = train_df[TARGET_COL]
     X_train = train_df.drop(columns=[TARGET_COL, "SK_ID_CURR"])
 
     print("Loading model ...")
     model = load_model()
-
-    # Retrain on full train
-    print("Retraining on full training set ...")
-    model.fit(X_train, y_train)
+    # Model is already trained — use loaded parameters directly for SHAP
 
     # Sample for SHAP computation (too slow on full data)
     X_sample = X_train.sample(n=min(args.sample, len(X_train)), random_state=RANDOM_STATE)

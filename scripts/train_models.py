@@ -20,14 +20,13 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_auc_score
 import xgboost as xgb
 import lightgbm as lgb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import (
-    FEATURES_TEST_CSV,
     FEATURES_TRAIN_CSV,
     LGB_PARAMS,
     MODEL_PATH,
@@ -38,17 +37,11 @@ from config import (
     RF_PARAMS,
     TARGET_COL,
     XGB_PARAMS,
+    ks_score,
 )
 
 warnings.filterwarnings("ignore")
 
-
-def ks_score(y_true, y_proba):
-    """Compute Kolmogorov-Smirnov statistic."""
-    from scipy import stats
-    pos_proba = y_proba[y_true == 1]
-    neg_proba = y_proba[y_true == 0]
-    return stats.ks_2samp(pos_proba, neg_proba).statistic
 
 
 def gini_score(y_true, y_proba):
@@ -201,7 +194,7 @@ def main():
 
     # Recreate model from scratch, then fit on full data
     if best_model_name == "logistic_regression":
-        best_model = LogisticRegression(max_iter=1000, class_weight="balanced", random_state=RANDOM_STATE)
+        best_model = LogisticRegression(max_iter=1000, class_weight="balanced", random_state=RANDOM_STATE, solver="lbfgs")
         best_model.fit(X, y)
     elif best_model_name == "random_forest":
         best_model = RandomForestClassifier(**RF_PARAMS)
@@ -212,7 +205,7 @@ def main():
     elif best_model_name == "lightgbm":
         from sklearn.model_selection import train_test_split as _tts
         X_rt, X_val, y_rt, y_val = _tts(X, y, test_size=0.1, random_state=RANDOM_STATE, stratify=y)
-        best_model = lgb.LGBMClassifier(**LGB_PARAMS)
+        best_model = lgb.LGBMClassifier(**{k: v for k, v in LGB_PARAMS.items() if k not in ("early_stopping_rounds", "verbose")})
         best_model.fit(X_rt, y_rt, eval_set=[(X_val, y_val)])
     else:
         best_model = models[best_model_name]

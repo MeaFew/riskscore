@@ -15,7 +15,6 @@ into the main application_train table by SK_ID_CURR.
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -44,7 +43,7 @@ def aggregate_bureau(df: pd.DataFrame) -> pd.DataFrame:
     return agg.reset_index()
 
 
-def aggregate_bureau_balance(df: pd.DataFrame) -> pd.DataFrame:
+def aggregate_bureau_balance(df: pd.DataFrame, bureau_df: pd.DataFrame) -> pd.DataFrame:
     """Aggregate bureau_balance.csv features per SK_ID_BUREAU, then merge with bureau."""
     # Status distribution per bureau record
     status_counts = df.groupby("SK_ID_BUREAU")["STATUS"].value_counts().unstack(fill_value=0)
@@ -58,7 +57,7 @@ def aggregate_bureau_balance(df: pd.DataFrame) -> pd.DataFrame:
     status_counts = status_counts.reset_index()
 
     # Merge with bureau to get SK_ID_CURR
-    bureau = pd.read_csv(RAW_DATA_DIR / "bureau.csv", usecols=["SK_ID_CURR", "SK_ID_BUREAU"])
+    bureau = bureau_df[["SK_ID_CURR", "SK_ID_BUREAU"]]
     merged = status_counts.merge(bureau, on="SK_ID_BUREAU", how="left")
     # Aggregate per SK_ID_CURR
     grp = merged.groupby("SK_ID_CURR")
@@ -167,7 +166,7 @@ def main():
     features.append(aggregate_bureau(bureau))
 
     print("Aggregating bureau_balance ...")
-    features.append(aggregate_bureau_balance(bureau_balance))
+    features.append(aggregate_bureau_balance(bureau_balance, bureau))
 
     print("Aggregating previous_application ...")
     features.append(aggregate_previous_application(prev_app))

@@ -97,7 +97,8 @@ def main():
         with col2:
             st.metric("Test Samples", f"{len(test_df):,}")
         with col3:
-            st.metric("Features", train_df.shape[1] - 2)
+            metadata_cols = sum(1 for c in ["TARGET", "SK_ID_CURR"] if c in train_df.columns)
+            st.metric("Features", train_df.shape[1] - metadata_cols)
         with col4:
             st.metric("Default Rate", f"{train_df[TARGET_COL].mean()*100:.2f}%")
 
@@ -166,20 +167,20 @@ def main():
         st.header("Score Distribution")
 
         model = load_model()
-        X_test = train_df.drop(columns=["SK_ID_CURR"])
-        y_test = train_df[TARGET_COL]
-        y_proba = model.predict_proba(X_test)[:, 1]
+        X_eval = test_df.drop(columns=["SK_ID_CURR"])
+        y_eval = test_df[TARGET_COL]
+        y_proba = model.predict_proba(X_eval)[:, 1]
 
         fig = go.Figure()
         fig.add_trace(go.Histogram(
-            x=y_proba[y_test == 0],
+            x=y_proba[y_eval == 0],
             name="Non-default",
             opacity=0.7,
             nbinsx=50,
             marker_color="#3b82f6",
         ))
         fig.add_trace(go.Histogram(
-            x=y_proba[y_test == 1],
+            x=y_proba[y_eval == 1],
             name="Default",
             opacity=0.7,
             nbinsx=50,
@@ -197,7 +198,7 @@ def main():
         # Confusion matrix
         threshold = results.get("test_metrics", {}).get("threshold", 0.5)
         y_pred = (y_proba >= threshold).astype(int)
-        cm = pd.crosstab(y_test, y_pred, rownames=["Actual"], colnames=["Predicted"])
+        cm = pd.crosstab(y_eval, y_pred, rownames=["Actual"], colnames=["Predicted"])
         st.subheader("Confusion Matrix")
         st.dataframe(cm, use_container_width=True)
 
@@ -208,7 +209,7 @@ def main():
         model = load_model()
         if hasattr(model, "feature_importances_"):
             importances = model.feature_importances_
-            features = test_df.drop(columns=[TARGET_COL, "SK_ID_CURR"]).columns.tolist()
+            features = test_df.drop(columns=["SK_ID_CURR"], errors="ignore").columns.tolist()
             imp_df = pd.DataFrame({"Feature": features, "Importance": importances})
             imp_df = imp_df.sort_values("Importance", ascending=True).tail(15)
 
@@ -236,9 +237,12 @@ def main():
         st.markdown("Adjust feature values to see predicted default probability.")
 
         model = load_model()
-        features = test_df.drop(columns=[TARGET_COL, "SK_ID_CURR"]).columns.tolist()
+        features = test_df.drop(columns=["SK_ID_CURR"], errors="ignore").columns.tolist()
 
         # Use a random test case as default
+        if test_df.empty:
+            st.warning("No test data available for risk calculation.")
+            st.stop()
         sample_idx = st.number_input("Sample Index", 0, len(test_df) - 1, 0)
         sample = test_df.iloc[sample_idx].drop(labels=[TARGET_COL, "SK_ID_CURR"], errors='ignore')
 
