@@ -35,8 +35,11 @@ End-to-end credit risk scoring pipeline built on the Kaggle Home Credit Default 
 ## Quick Start
 
 ```bash
-# Generate synthetic data for local testing
-python scripts/generate_mock_data.py
+git clone https://github.com/MeaFew/credit-risk-scoring.git
+cd credit-risk-scoring
+
+# Download real dataset (GitHub Releases, ~40MB)
+bash download_data.sh
 
 # Run full pipeline
 make all
@@ -51,7 +54,7 @@ make shap
 # Launch dashboard
 make dashboard
 
-# Run tests
+# Quality gates
 make verify
 ```
 
