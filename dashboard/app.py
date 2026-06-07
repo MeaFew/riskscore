@@ -54,16 +54,17 @@ def load_data():
 
 @st.cache_resource
 def load_model():
-    if not MODEL_PATH.exists() and not MODEL_PATH.with_suffix(".joblib").exists():
+    json_path = MODEL_PATH.with_suffix(".json")
+    joblib_path = MODEL_PATH.with_suffix(".joblib")
+    if not json_path.exists() and not joblib_path.exists():
         st.error("Model file not found. Run `make train` first.")
         st.stop()
-    if MODEL_PATH.exists():
+    if json_path.exists():
         import xgboost as xgb
         model = xgb.XGBClassifier()
-        model.load_model(str(MODEL_PATH))
+        model.load_model(str(json_path))
         return model
-    model_path = MODEL_PATH.with_suffix(".joblib")
-    return joblib.load(str(model_path))
+    return joblib.load(str(joblib_path))
 
 
 def main():

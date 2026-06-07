@@ -29,15 +29,28 @@ from config import (
 
 
 def load_model():
-    """Load the best trained model."""
-    if MODEL_PATH.exists():
+    """Load the best trained model, auto-detecting file format."""
+    json_path = MODEL_PATH.with_suffix(".json")
+    joblib_path = MODEL_PATH.with_suffix(".joblib")
+    if json_path.exists():
         import xgboost as xgb
         model = xgb.XGBClassifier()
-        model.load_model(str(MODEL_PATH))
+        model.load_model(str(json_path))
         return model
+    elif joblib_path.exists():
+        return joblib.load(str(joblib_path))
     else:
-        model_path = MODEL_PATH.with_suffix(".joblib")
-        return joblib.load(str(model_path))
+        # Last resort: any model file in MODELS_DIR
+        candidates = list(MODEL_PATH.parent.glob("*_risk_model.*"))
+        if candidates:
+            p = candidates[0]
+            if p.suffix == ".json":
+                import xgboost as xgb
+                model = xgb.XGBClassifier()
+                model.load_model(str(p))
+                return model
+            return joblib.load(str(p))
+        raise FileNotFoundError(f"No model file found for stem {MODEL_PATH}")
 
 
 def plot_shap_summary(shap_values, X_sample, feature_names, save_path: Path):

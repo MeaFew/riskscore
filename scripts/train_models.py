@@ -223,11 +223,10 @@ def main():
     else:
         best_model = models[best_model_name]
 
-    # Save model
+    # Save model in both formats for maximum compatibility
     if hasattr(best_model, "save_model"):
-        best_model.save_model(str(MODEL_PATH))
-    else:
-        joblib.dump(best_model, str(MODEL_PATH.with_suffix(".joblib")))
+        best_model.save_model(str(MODEL_PATH.with_suffix(".json")))
+    joblib.dump(best_model, str(MODEL_PATH.with_suffix(".joblib")))
 
     # Save results
     with open(MODEL_RESULTS_JSON, "w") as f:
