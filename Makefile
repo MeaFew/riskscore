@@ -48,7 +48,7 @@ sql-lint:
 docker-build:
 	@echo "No Dockerfile in this project — skipping docker-build"
 
-verify: lint test
+verify: lint format-check test audit
 	@echo "All quality gates passed"
 
 # ── Utilities ─────────────────────────────────────────────────────
@@ -57,3 +57,14 @@ clean:
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
+
+# === Quality gates (extended) ===
+
+format:
+	ruff format scripts/ dashboard/
+
+format-check:
+	ruff format --check scripts/ dashboard/
+
+audit:
+	$(PYTHON) scripts/audit_consistency.py
