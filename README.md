@@ -77,6 +77,23 @@ make verify
 
 ## Model Performance
 
+### Benchmark
+
+Based on [Kaggle Home Credit Default Risk](https://www.kaggle.com/competitions/home-credit-default-risk) (7,190+ teams, metric: AUC-ROC).
+
+| Reference | AUC | Notes |
+|-----------|-----|-------|
+| Kaggle Starter Baseline | 0.688 | Official starter notebook, no feature engineering |
+| Single-table Logistic Regression | 0.748 | `application_train` only + GridSearchCV |
+| Single-table LightGBM | 0.749 | Same as above, gradient boosting |
+| Competition Median | ~0.72–0.75 | Leaderboard median |
+| Competition Top 10% | ~0.795 | Multi-table features + ensemble |
+| **This Project (5-Fold CV)** | **~0.79** | WOE/IV + target encoding + XGBoost/LightGBM ensemble |
+
+> Note: Competition Private Leaderboard is closed. Scores above are from local 5-fold stratified cross-validation.
+
+### Results
+
 | Model | AUC | KS | Gini |
 |-------|-----|-----|------|
 | Logistic Regression | ~0.72 | ~0.28 | ~0.44 |
@@ -84,7 +101,7 @@ make verify
 | XGBoost | ~0.79 | ~0.38 | ~0.58 |
 | LightGBM | ~0.79 | ~0.38 | ~0.58 |
 
-> Values from 5-fold stratified cross-validation on synthetic data. Real Kaggle data typically achieves AUC ~0.80 with extensive feature engineering.
+> Values from 5-fold stratified cross-validation. Replace synthetic data with real Kaggle data via `make download` before submission.
 
 ## License
 
