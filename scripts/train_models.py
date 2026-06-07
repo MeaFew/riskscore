@@ -200,10 +200,28 @@ def main():
     models["xgboost"], results["xgboost"] = train_xgboost(X, y)
     models["lightgbm"], results["lightgbm"] = train_lightgbm(X, y)
 
-    # Save best model (highest AUC)
+    # Save best model (highest AUC) — retrain on full data
     best_model_name = max(results, key=lambda k: results[k]["auc_mean"])
-    best_model = models[best_model_name]
-    print(f"\nBest model: {best_model_name} (AUC={results[best_model_name]['auc_mean']:.4f})")
+    print(f"\nBest model: {best_model_name} (CV AUC={results[best_model_name]['auc_mean']:.4f})")
+    print(f"Retraining {best_model_name} on full training set ...")
+
+    # Recreate model from scratch, then fit on full data
+    if best_model_name == "logistic_regression":
+        best_model = LogisticRegression(max_iter=1000, random_state=RANDOM_STATE)
+        best_model.fit(X, y)
+    elif best_model_name == "random_forest":
+        best_model = RandomForestClassifier(**RF_PARAMS)
+        best_model.fit(X, y)
+    elif best_model_name == "xgboost":
+        best_model = xgb.XGBClassifier(**{k: v for k, v in XGB_PARAMS.items() if k != "early_stopping_rounds"})
+        best_model.fit(X, y)
+    elif best_model_name == "lightgbm":
+        from sklearn.model_selection import train_test_split as _tts
+        X_rt, X_val, y_rt, y_val = _tts(X, y, test_size=0.1, random_state=RANDOM_STATE, stratify=y)
+        best_model = lgb.LGBMClassifier(**LGB_PARAMS)
+        best_model.fit(X_rt, y_rt, eval_set=[(X_val, y_val)])
+    else:
+        best_model = models[best_model_name]
 
     # Save model
     if hasattr(best_model, "save_model"):

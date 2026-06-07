@@ -32,15 +32,21 @@ from config import (
 
 st.set_page_config(
     page_title="Credit Risk Scoring Dashboard",
-    page_icon="",
+    page_icon="🏦",
     layout="wide",
 )
 
 
 @st.cache_data
 def load_data():
+    if not FEATURES_TRAIN_CSV.exists() or not FEATURES_TEST_CSV.exists():
+        st.error("Data files not found. Run `make features` first.")
+        st.stop()
     train = pd.read_csv(FEATURES_TRAIN_CSV)
     test = pd.read_csv(FEATURES_TEST_CSV)
+    if not MODEL_RESULTS_JSON.exists():
+        st.error("Model results not found. Run `make train evaluate` first.")
+        st.stop()
     with open(MODEL_RESULTS_JSON, "r") as f:
         results = json.load(f)
     return train, test, results
@@ -48,6 +54,9 @@ def load_data():
 
 @st.cache_resource
 def load_model():
+    if not MODEL_PATH.exists() and not MODEL_PATH.with_suffix(".joblib").exists():
+        st.error("Model file not found. Run `make train` first.")
+        st.stop()
     if MODEL_PATH.exists():
         import xgboost as xgb
         model = xgb.XGBClassifier()

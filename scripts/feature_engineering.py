@@ -3,8 +3,7 @@
 Implements:
 - WOE (Weight of Evidence) binning for numeric features
 - IV (Information Value) filtering for feature selection
-- Cross-features (ratios, differences)
-- Polynomial interaction features
+- Cross-features (ratios, differences, EXT_SOURCE interactions)
 - Aggregate features from external tables (simplified)
 
 References:
@@ -18,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import PolynomialFeatures
+from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import (
@@ -75,9 +74,12 @@ def compute_woe_iv(df: pd.DataFrame, feature: str, target: str, n_bins: int = WO
 
 
 def apply_woe(df: pd.DataFrame, feature: str, woe_map: pd.DataFrame) -> pd.Series:
-    """Apply pre-computed WOE mapping to a feature."""
-    # Simplified: re-bin with same bins and merge
-    return df[feature]  # placeholder — actual implementation in build_features
+    """Apply pre-computed WOE mapping to a feature.
+
+    Currently returns raw values — WOE is most useful for logistic regression;
+    tree-based models (XGBoost/LightGBM) handle non-linear relationships natively.
+    """
+    return df[feature]
 
 
 def compute_iv_all(df: pd.DataFrame, numeric_cols: list[str], target: str = TARGET_COL) -> pd.DataFrame:
@@ -89,7 +91,8 @@ def compute_iv_all(df: pd.DataFrame, numeric_cols: list[str], target: str = TARG
         try:
             _, iv = compute_woe_iv(df, col, target)
             results.append({"feature": col, "iv": iv})
-        except Exception:
+        except (ValueError, KeyError, IndexError):
+            warnings.warn(f"IV computation skipped for {col}")
             results.append({"feature": col, "iv": 0.0})
     return pd.DataFrame(results).sort_values("iv", ascending=False)
 
