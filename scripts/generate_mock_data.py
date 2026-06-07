@@ -128,15 +128,22 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-rows", type=int, default=30000)
     parser.add_argument("--test-rows", type=int, default=5000)
+    parser.add_argument("--force", action="store_true", help="Overwrite existing real data")
     args = parser.parse_args()
 
     RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+    train_path = RAW_DATA_DIR / "application_train.csv"
+    test_path = RAW_DATA_DIR / "application_test.csv"
+
+    if train_path.exists() and test_path.exists() and not args.force:
+        print(f"Real data already exists at {train_path} and {test_path}")
+        print("Skipping mock data generation. Use --force to overwrite.")
+        return
+
     train_df = generate_application_train(args.train_rows)
     test_df = generate_application_test(args.test_rows)
 
-    train_path = RAW_DATA_DIR / "application_train.csv"
-    test_path = RAW_DATA_DIR / "application_test.csv"
     train_df.to_csv(train_path, index=False)
     test_df.to_csv(test_path, index=False)
 

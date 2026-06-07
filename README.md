@@ -88,20 +88,20 @@ Based on [Kaggle Home Credit Default Risk](https://www.kaggle.com/competitions/h
 | Single-table LightGBM | 0.749 | Same as above, gradient boosting |
 | Competition Median | ~0.72–0.75 | Leaderboard median |
 | Competition Top 10% | ~0.795 | Multi-table features + ensemble |
-| **This Project (5-Fold CV)** | **~0.79** | WOE/IV + target encoding + XGBoost/LightGBM ensemble |
+| **This Project (5-Fold CV)** | **0.763** | WOE/IV + target encoding + XGBoost/LightGBM ensemble |
 
-> Note: Competition Private Leaderboard is closed. Scores above are from local 5-fold stratified cross-validation.
+> Note: Competition Private Leaderboard is closed. Scores above are from local 5-fold stratified cross-validation on real Kaggle data (307,511 train / 48,744 test).
 
 ### Results
 
 | Model | AUC | KS | Gini |
 |-------|-----|-----|------|
-| Logistic Regression | ~0.72 | ~0.28 | ~0.44 |
-| Random Forest | ~0.76 | ~0.34 | ~0.52 |
-| XGBoost | ~0.79 | ~0.38 | ~0.58 |
-| LightGBM | ~0.79 | ~0.38 | ~0.58 |
+| Logistic Regression | 0.634 | 0.205 | 0.268 |
+| Random Forest | 0.745 | 0.366 | 0.490 |
+| XGBoost | 0.762 | 0.394 | 0.525 |
+| LightGBM | **0.763** | **0.394** | **0.526** |
 
-> Values from 5-fold stratified cross-validation. Replace synthetic data with real Kaggle data via `make download` before submission.
+> Values from 5-fold stratified cross-validation on real Kaggle data. Hold-out test set AUC = 0.766.
 
 ## License
 
