@@ -4,8 +4,13 @@
   <img src="https://img.shields.io/badge/python-3.11-blue?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/XGBoost-2.0-green?logo=xgboost&logoColor=white" alt="XGBoost">
   <img src="https://img.shields.io/badge/LightGBM-4.0-blue?logo=lightgbm&logoColor=white" alt="LightGBM">
-  <img src="https://img.shields.io/badge/SHAP-0.42-orange?logo=shap&logoColor=white" alt="SHAP">
+  <img src="https://img.shields.io/badge/SHAP-0.42-orange" alt="SHAP">
   <a href="https://github.com/MeaFew/credit-risk-scoring/actions"><img src="https://github.com/MeaFew/credit-risk-scoring/workflows/CI/badge.svg" alt="CI"></a>
+</p>
+
+<p align="center">
+  🏠 <b>主仓：<a href="https://gitee.com/zeroonei1/credit-risk-scoring">Gitee</a></b> &nbsp;|&nbsp;
+  🔗 <a href="https://github.com/MeaFew/credit-risk-scoring">GitHub（自动同步）</a>
 </p>
 
 <p align="center">
@@ -39,6 +44,10 @@ End-to-end credit risk scoring pipeline built on the Kaggle Home Credit Default 
 ## Quick Start
 
 ```bash
+# 从 Gitee 克隆（国内推荐，速度更快）
+git clone https://gitee.com/zeroonei1/credit-risk-scoring.git
+
+# 或从 GitHub
 git clone https://github.com/MeaFew/credit-risk-scoring.git
 cd credit-risk-scoring
 
@@ -113,11 +122,11 @@ Based on [Kaggle Home Credit Default Risk](https://www.kaggle.com/competitions/h
 
 ## 相关项目
 
-| 项目 | 仓库 | 简介 |
-|------|------|------|
-| 电商用户行为分析 | [MeaFew/ecommerce-user-analytics](https://github.com/MeaFew/ecommerce-user-analytics) | 2,900万条真实用户行为数据，10大分析模块 |
-| 营销归因与预算优化 | [MeaFew/marketing-attribution-mmm](https://github.com/MeaFew/marketing-attribution-mmm) | MMM + 多触点归因 + 预算优化 |
-| 多元时序预测 | [MeaFew/multivariate-timeseries-forecasting](https://github.com/MeaFew/multivariate-timeseries-forecasting) | LSTM / Transformer / XGBoost 时序预测对比 |
+| 项目 | Gitee（主仓） | GitHub（镜像） |
+|------|---------------|-----------------|
+| 电商用户行为分析 | [Gitee](https://gitee.com/zeroonei1/ecommerce-user-analytics) | [GitHub](https://github.com/MeaFew/ecommerce-user-analytics) |
+| 营销归因与预算优化 | [Gitee](https://gitee.com/zeroonei1/marketing-attribution-mmm) | [GitHub](https://github.com/MeaFew/marketing-attribution-mmm) |
+| 多元时序预测 | [Gitee](https://gitee.com/zeroonei1/multivariate-timeseries-forecasting) | [GitHub](https://github.com/MeaFew/multivariate-timeseries-forecasting) |
 
 ## License
 

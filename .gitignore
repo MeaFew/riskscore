@@ -104,4 +104,4 @@ wandb/
 # DuckDB
 *.duckdb
 *.duckdb.wal
-credit-risk-scoring/data.zip
+data.zip
