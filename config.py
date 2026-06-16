@@ -1,4 +1,4 @@
-"""Project-wide configuration for credit-risk-scoring.
+"""Project-wide configuration for riskscore.
 
 All paths are resolved relative to this file's location.
 """

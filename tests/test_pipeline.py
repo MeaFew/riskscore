@@ -1,4 +1,4 @@
-"""Tests for credit-risk-scoring preprocessing and feature engineering."""
+"""Tests for riskscore preprocessing and feature engineering."""
 
 import sys
 from pathlib import Path

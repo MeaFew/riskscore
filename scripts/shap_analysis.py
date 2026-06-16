@@ -1,4 +1,4 @@
-"""SHAP interpretability analysis for credit-risk-scoring.
+"""SHAP interpretability analysis for riskscore.
 
 Generates:
 - SHAP summary plot (beeswarm)

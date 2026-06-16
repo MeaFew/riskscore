@@ -1,4 +1,4 @@
-"""Data preprocessing pipeline for credit-risk-scoring.
+"""Data preprocessing pipeline for riskscore.
 
 Handles missing values, outlier capping, categorical encoding,
 and saves cleaned train/test sets.

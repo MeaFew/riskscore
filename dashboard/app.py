@@ -1,4 +1,4 @@
-"""Streamlit dashboard for credit-risk-scoring.
+"""Streamlit dashboard for riskscore.
 
 Interactive visualizations:
 - Model performance comparison

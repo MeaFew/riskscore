@@ -6,8 +6,8 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/MeaFew/credit-risk-scoring.git
-cd credit-risk-scoring
+git clone https://github.com/MeaFew/riskscore.git
+cd riskscore
 
 # 2. 创建虚拟环境 (推荐 Python 3.12)
 python -m venv .venv

@@ -1,4 +1,4 @@
-"""Feature engineering for credit-risk-scoring.
+"""Feature engineering for riskscore.
 
 Implements:
 - WOE (Weight of Evidence) binning for numeric features

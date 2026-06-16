@@ -1,4 +1,4 @@
-"""Model evaluation and calibration for credit-risk-scoring.
+"""Model evaluation and calibration for riskscore.
 
 Generates:
 - ROC curve plot

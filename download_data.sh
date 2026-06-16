@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-RELEASE_URL="https://github.com/MeaFew/credit-risk-scoring/releases/download/v1.0-data/data.zip"
+RELEASE_URL="https://github.com/MeaFew/riskscore/releases/download/v1.0-data/data.zip"
 DEST_DIR="$(dirname "$0")"
-echo "Downloading data for credit-risk-scoring..."
+echo "Downloading data for riskscore..."
 curl -L -o "${DEST_DIR}/data.zip" "${RELEASE_URL}"
 echo "Extracting..."
 unzip -o "${DEST_DIR}/data.zip" -d "${DEST_DIR}/data/raw/"
