@@ -98,12 +98,12 @@ Based on [Kaggle Home Credit Default Risk](https://www.kaggle.com/competitions/h
 
 | Model | AUC | KS | Gini |
 |-------|-----|-----|------|
-| Logistic Regression | 0.634 | 0.205 | 0.268 |
+| Logistic Regression | 0.654 | 0.233 | 0.308 |
 | Random Forest | 0.745 | 0.366 | 0.490 |
 | XGBoost | **0.762** | **0.394** | **0.525** |
-| LightGBM | **0.763** | **0.394** | **0.526** |
+| LightGBM | **0.763** | **0.394** | **0.525** |
 
-> Values from 5-fold stratified cross-validation on real Kaggle data with single-table features (application_train only). Hold-out test set AUC = **0.766** (LightGBM). Multi-table features (bureau, previous_application, etc.) can push AUC to **0.783** by running the auxiliary aggregation scripts.
+> Values from 5-fold stratified cross-validation on real Kaggle data (307,511 samples) with single-table features (application_train only). Hold-out test set (80/20 split) AUC = **0.801** (XGBoost). Multi-table features (bureau, previous_application, etc.) can further improve AUC by running the auxiliary aggregation scripts.
 
 ## Related Projects
 

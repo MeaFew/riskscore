@@ -165,25 +165,34 @@ def main():
     if train_exists and test_exists:
         train_df = pd.read_csv(FEATURES_TRAIN_CSV)
         test_df = pd.read_csv(FEATURES_TEST_CSV)
-        train_cols = len(train_df.columns)
-        test_cols = len(test_df.columns)
+
+        # The test set has no TARGET column, so it has one fewer column than
+        # train. Compare the feature columns (excluding the id/target meta
+        # columns) rather than the raw column counts.
+        meta_cols = {"SK_ID_CURR", "TARGET"}
+        train_features = [c for c in train_df.columns if c not in meta_cols]
+        test_features = [c for c in test_df.columns if c not in meta_cols]
         ok = check(
-            train_cols == test_cols,
-            f"Train & test column counts match: train={train_cols}, test={test_cols}",
+            train_features == test_features,
+            f"Train & test feature columns match: "
+            f"train_features={len(train_features)}, test_features={len(test_features)}",
         )
         if ok:
             passed += 1
         else:
             failed += 1
 
-        # Check against model_results.json feature_count
+        # Check against model_results.json feature_count. feature_count is the
+        # number of model input features; train_features excludes SK_ID_CURR
+        # and TARGET so it should equal feature_count.
         with open(MODEL_RESULTS_JSON) as f:
             results = json.load(f)
         expected_features = results.get("feature_count")
         if expected_features is not None:
             ok = check(
-                train_cols == expected_features,
-                f"Train columns ({train_cols}) match model_results.json feature_count ({expected_features})",
+                len(train_features) == expected_features,
+                f"Train feature columns ({len(train_features)}) match "
+                f"model_results.json feature_count ({expected_features})",
             )
             if ok:
                 passed += 1
