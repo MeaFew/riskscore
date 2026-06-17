@@ -26,6 +26,8 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from metrics_utils import ks_score
+
 from config import (
     FEATURES_TRAIN_CSV,
     LGB_PARAMS,
@@ -37,10 +39,13 @@ from config import (
     RF_PARAMS,
     TARGET_COL,
     XGB_PARAMS,
-    ks_score,
 )
 
-warnings.filterwarnings("ignore")
+# Silence only the noisy LightGBM/XGBoost fitting chatter, not genuine
+# convergence / deprecation warnings from sklearn (a blanket "ignore"
+# previously hid real signal such as LogisticRegression not converging).
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*lightgbm.*", category=Warning)
 
 
 def gini_score(y_true, y_proba):
@@ -48,8 +53,13 @@ def gini_score(y_true, y_proba):
     return 2 * roc_auc_score(y_true, y_proba) - 1
 
 
-def cross_validate_model(model, X, y, cv=5):
-    """Stratified K-Fold cross-validation with AUC, KS, Gini."""
+def cross_validate_model(model, X, y, cv=5, fit_kwargs=None):
+    """Stratified K-Fold cross-validation with AUC, KS, Gini.
+
+    ``fit_kwargs`` (if given) is called as ``fit_kwargs(X_tr, y_tr, X_val,
+    y_val)`` and must return a dict of extra kwargs to pass to ``model.fit`` —
+    used by XGBoost/LightGBM to supply ``eval_set`` for early stopping.
+    """
     skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=RANDOM_STATE)
 
     aucs, kss, ginis = [], [], []
@@ -57,7 +67,10 @@ def cross_validate_model(model, X, y, cv=5):
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-        model.fit(X_train, y_train)
+        extra = {}
+        if fit_kwargs is not None:
+            extra = fit_kwargs(X_train, y_train, X_val, y_val) or {}
+        model.fit(X_train, y_train, **extra)
         y_proba = model.predict_proba(X_val)[:, 1]
 
         aucs.append(roc_auc_score(y_val, y_proba))
@@ -72,6 +85,11 @@ def cross_validate_model(model, X, y, cv=5):
         "gini_mean": float(np.mean(ginis)),
         "gini_std": float(np.std(ginis)),
     }
+
+
+def _eval_set_kwargs(X_tr, y_tr, X_val, y_val):
+    """fit_kwargs callback: pass the val split as eval_set for early stopping."""
+    return {"eval_set": [(X_val, y_val)]}
 
 
 def train_logistic_regression(X, y):
@@ -99,34 +117,7 @@ def train_xgboost(X, y):
     model = xgb.XGBClassifier(
         **{k: v for k, v in XGB_PARAMS.items() if k not in ("early_stopping_rounds",)}
     )
-
-    # Manual CV with early stopping
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
-    aucs, kss, ginis = [], [], []
-    for train_idx, val_idx in skf.split(X, y):
-        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-
-        model.fit(
-            X_train,
-            y_train,
-            eval_set=[(X_val, y_val)],
-            verbose=False,
-        )
-        y_proba = model.predict_proba(X_val)[:, 1]
-        aucs.append(roc_auc_score(y_val, y_proba))
-        kss.append(ks_score(y_val, y_proba))
-        ginis.append(gini_score(y_val, y_proba))
-
-    metrics = {
-        "auc_mean": float(np.mean(aucs)),
-        "auc_std": float(np.std(aucs)),
-        "ks_mean": float(np.mean(kss)),
-        "ks_std": float(np.std(kss)),
-        "gini_mean": float(np.mean(ginis)),
-        "gini_std": float(np.std(ginis)),
-    }
-    return model, metrics
+    return model, cross_validate_model(model, X, y, fit_kwargs=_eval_set_kwargs)
 
 
 def train_lightgbm(X, y):
@@ -135,32 +126,7 @@ def train_lightgbm(X, y):
     model = lgb.LGBMClassifier(
         **{k: v for k, v in LGB_PARAMS.items() if k not in ("early_stopping_rounds", "verbose")}
     )
-
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
-    aucs, kss, ginis = [], [], []
-    for train_idx, val_idx in skf.split(X, y):
-        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-
-        model.fit(
-            X_train,
-            y_train,
-            eval_set=[(X_val, y_val)],
-        )
-        y_proba = model.predict_proba(X_val)[:, 1]
-        aucs.append(roc_auc_score(y_val, y_proba))
-        kss.append(ks_score(y_val, y_proba))
-        ginis.append(gini_score(y_val, y_proba))
-
-    metrics = {
-        "auc_mean": float(np.mean(aucs)),
-        "auc_std": float(np.std(aucs)),
-        "ks_mean": float(np.mean(kss)),
-        "ks_std": float(np.std(kss)),
-        "gini_mean": float(np.mean(ginis)),
-        "gini_std": float(np.std(ginis)),
-    }
-    return model, metrics
+    return model, cross_validate_model(model, X, y, fit_kwargs=_eval_set_kwargs)
 
 
 def main():

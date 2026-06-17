@@ -26,6 +26,8 @@ from sklearn.metrics import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from metrics_utils import ks_score
+
 from config import (
     FEATURES_TEST_CSV,
     FEATURES_TRAIN_CSV,
@@ -36,7 +38,6 @@ from config import (
     RANDOM_STATE,
     REPORTS_DIR,
     TARGET_COL,
-    ks_score,
 )
 
 
@@ -195,37 +196,11 @@ def main():
         results = json.load(f)
     best_name = results.get("best_model", "xgboost")
 
-    # Auto-detect model file: try based on best_model type
-    # For XGBoost, prefer native .json; for others, always use .joblib
-    model_path = None
-    if best_name == "xgboost":
-        # Try native .json first for XGBoost
-        for ext in (".json", ".joblib"):
-            candidate = MODEL_PATH.with_suffix(ext)
-            if candidate.exists():
-                model_path = candidate
-                break
-    else:
-        # Prefer .joblib for all other model types (avoids native-format load failures)
-        for ext in (".joblib", ".json"):
-            candidate = MODEL_PATH.with_suffix(ext)
-            if candidate.exists():
-                model_path = candidate
-                break
-    if model_path is None:
-        # Try best_name-based naming convention
-        for ext in (".joblib", ".json"):
-            candidate = MODELS_DIR / f"{best_name}_risk_model{ext}"
-            if candidate.exists():
-                model_path = candidate
-                break
-    if model_path is None:
-        # Last resort: any model file in MODELS_DIR
-        candidates = list(MODELS_DIR.glob("*_risk_model.*"))
-        if candidates:
-            model_path = candidates[0]
-        else:
-            raise FileNotFoundError(f"No model file found in {MODELS_DIR}")
+    # Resolve the persisted model file via the shared helper (kept consistent
+    # with shap_analysis.py and the dashboard).
+    from metrics_utils import find_best_model_path
+
+    model_path = find_best_model_path(MODELS_DIR, MODEL_PATH.stem, best_name)
 
     if best_name == "xgboost" and model_path.suffix == ".json":
         import xgboost as xgb

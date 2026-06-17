@@ -26,7 +26,9 @@ def aggregate_bureau(df: pd.DataFrame) -> pd.DataFrame:
     grp = df.groupby("SK_ID_CURR")
     agg = pd.DataFrame()
     agg["bureau_count"] = grp.size()
-    agg["bureau_active_count"] = grp.apply(lambda x: (x["CREDIT_ACTIVE"] == "Active").sum())
+    # Vectorized boolean count instead of groupby.apply(lambda).
+    active = (df["CREDIT_ACTIVE"] == "Active").astype(int)
+    agg["bureau_active_count"] = active.groupby(df["SK_ID_CURR"]).sum()
     agg["bureau_active_ratio"] = agg["bureau_active_count"] / agg["bureau_count"]
     agg["bureau_avg_days_credit"] = grp["DAYS_CREDIT"].mean()
     agg["bureau_max_days_credit"] = grp["DAYS_CREDIT"].max()
@@ -80,9 +82,9 @@ def aggregate_previous_application(df: pd.DataFrame) -> pd.DataFrame:
     grp = df.groupby("SK_ID_CURR")
     agg = pd.DataFrame()
     agg["prev_app_count"] = grp.size()
-    agg["prev_app_approved_count"] = grp.apply(
-        lambda x: (x["NAME_CONTRACT_STATUS"] == "Approved").sum()
-    )
+    # Vectorized boolean count instead of groupby.apply(lambda).
+    approved = (df["NAME_CONTRACT_STATUS"] == "Approved").astype(int)
+    agg["prev_app_approved_count"] = approved.groupby(df["SK_ID_CURR"]).sum()
     agg["prev_app_approved_ratio"] = agg["prev_app_approved_count"] / agg["prev_app_count"]
     agg["prev_app_avg_annuity"] = grp["AMT_ANNUITY"].mean()
     agg["prev_app_sum_annuity"] = grp["AMT_ANNUITY"].sum()
@@ -109,9 +111,9 @@ def aggregate_pos_cash(df: pd.DataFrame) -> pd.DataFrame:
     agg["pos_cash_avg_dpd_def"] = grp["SK_DPD_DEF"].mean()
     agg["pos_cash_avg_instalment"] = grp["CNT_INSTALMENT"].mean()
     agg["pos_cash_avg_instalment_future"] = grp["CNT_INSTALMENT_FUTURE"].mean()
-    agg["pos_cash_active_ratio"] = (
-        grp.apply(lambda x: (x["NAME_CONTRACT_STATUS"] == "Active").sum()) / agg["pos_cash_count"]
-    )
+    # Vectorized boolean ratio instead of groupby.apply(lambda).
+    active = (df["NAME_CONTRACT_STATUS"] == "Active").astype(int)
+    agg["pos_cash_active_ratio"] = active.groupby(df["SK_ID_CURR"]).mean()
     return agg.reset_index()
 
 
@@ -132,13 +134,11 @@ def aggregate_credit_card(df: pd.DataFrame) -> pd.DataFrame:
     agg["cc_avg_cnt_drawings_atm"] = grp["CNT_DRAWINGS_ATM_CURRENT"].mean()
     agg["cc_avg_dpd"] = grp["SK_DPD"].mean()
     agg["cc_max_dpd"] = grp["SK_DPD"].max()
-    agg["cc_active_ratio"] = (
-        grp.apply(lambda x: (x["NAME_CONTRACT_STATUS"] == "Active").sum()) / agg["cc_count"]
-    )
-    # Credit utilization
-    agg["cc_avg_utilization"] = grp.apply(
-        lambda x: (x["AMT_BALANCE"] / (x["AMT_CREDIT_LIMIT_ACTUAL"] + 1)).mean()
-    )
+    # Vectorized: active ratio and credit utilization without apply(lambda).
+    active = (df["NAME_CONTRACT_STATUS"] == "Active").astype(int)
+    agg["cc_active_ratio"] = active.groupby(df["SK_ID_CURR"]).mean()
+    utilization = df["AMT_BALANCE"] / (df["AMT_CREDIT_LIMIT_ACTUAL"] + 1)
+    agg["cc_avg_utilization"] = utilization.groupby(df["SK_ID_CURR"]).mean()
     return agg.reset_index()
 
 
@@ -154,7 +154,9 @@ def aggregate_installments(df: pd.DataFrame) -> pd.DataFrame:
     agg["inst_min_payment_ratio"] = grp["payment_ratio"].min()
     agg["inst_avg_days_diff"] = grp["days_diff"].mean()
     agg["inst_max_days_diff"] = grp["days_diff"].max()
-    agg["inst_late_count"] = grp.apply(lambda x: (x["days_diff"] > 0).sum())
+    # Vectorized boolean count instead of groupby.apply(lambda).
+    late = (df["days_diff"] > 0).astype(int)
+    agg["inst_late_count"] = late.groupby(df["SK_ID_CURR"]).sum()
     agg["inst_late_ratio"] = agg["inst_late_count"] / agg["inst_count"]
     agg["inst_avg_instalment"] = grp["AMT_INSTALMENT"].mean()
     agg["inst_sum_instalment"] = grp["AMT_INSTALMENT"].sum()
