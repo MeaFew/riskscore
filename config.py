@@ -27,22 +27,14 @@ MODEL_RESULTS_JSON = REPORTS_DIR / "model_results.json"
 SHAP_SUMMARY_PNG = IMAGES_DIR / "shap_summary.png"
 
 
-# ── Shared utility functions ─────────────────────────────────────
-import scipy.stats as _scipy_stats
-
-def ks_score(y_true, y_proba):
-    """Compute Kolmogorov-Smirnov statistic."""
-    pos = y_proba[y_true == 1]
-    neg = y_proba[y_true == 0]
-    return _scipy_stats.ks_2samp(pos, neg).statistic
-
 # ── Modeling constants ────────────────────────────────────────────
+# NOTE: metric helpers (e.g. ks_score) live in scripts/metrics_utils.py so that
+# importing this config module does not require scipy.
 TARGET_COL = "TARGET"
 RANDOM_STATE = 42
 
 # ── Feature engineering ───────────────────────────────────────────
 # WOE binning
-WOE_MIN_SAMPLES = 0.05  # Not currently used — planned for future WOE implementation
 WOE_MAX_BINS = 10
 
 # IV threshold for feature selection
@@ -51,7 +43,7 @@ IV_THRESHOLD = 0.02  # features with IV < 0.02 are considered weak
 # PSI threshold for stability monitoring
 PSI_THRESHOLD = 0.1  # Population Stability Index threshold for monitoring
 
-# ── Model hyperparameters (tuned via Optuna in practice) ──────────
+# ── Model hyperparameters (hand-tuned defaults; tune per dataset) ─
 XGB_PARAMS = {
     "objective": "binary:logistic",
     "eval_metric": "auc",
