@@ -39,7 +39,13 @@ def load_data(train_path: Path, test_path: Path) -> tuple[pd.DataFrame, pd.DataF
 def cap_outliers(
     df: pd.DataFrame, numeric_cols: list[str], lower_q: float = 0.001, upper_q: float = 0.999
 ) -> pd.DataFrame:
-    """Cap extreme outliers at given quantiles."""
+    """Cap extreme outliers at given quantiles.
+
+    Quantiles are estimated from the frame passed in. Callers that want a
+    leakage-free fit/transform should pass ``fit_quantiles=True`` first on the
+    train frame to capture the boundaries, then apply them to test via
+    :func:`cap_outliers_with_bounds`.
+    """
     df = df.copy()
     for col in numeric_cols:
         if col in df.columns:
@@ -48,13 +54,87 @@ def cap_outliers(
     return df
 
 
+def compute_outlier_bounds(
+    df: pd.DataFrame, numeric_cols: list[str], lower_q: float = 0.001, upper_q: float = 0.999
+) -> dict[str, tuple[float, float]]:
+    """Estimate outlier-capping boundaries from a (train) frame only.
+
+    Returns a mapping ``{col: (low, high)}`` that can be applied to any frame
+    via :func:`cap_outliers_with_bounds`, so test rows never influence the
+    boundaries used on train rows (leakage fix).
+    """
+    bounds: dict[str, tuple[float, float]] = {}
+    for col in numeric_cols:
+        if col in df.columns:
+            low, high = df[col].quantile([lower_q, upper_q])
+            bounds[col] = (float(low), float(high))
+    return bounds
+
+
+def cap_outliers_with_bounds(
+    df: pd.DataFrame, bounds: dict[str, tuple[float, float]]
+) -> pd.DataFrame:
+    """Apply precomputed outlier boundaries to a frame."""
+    df = df.copy()
+    for col, (low, high) in bounds.items():
+        if col in df.columns:
+            df[col] = df[col].clip(low, high)
+    return df
+
+
 def handle_missing_numeric(df: pd.DataFrame, numeric_cols: list[str]) -> pd.DataFrame:
-    """Impute missing numeric values with median."""
+    """Impute missing numeric values with median (fit_transform on the given frame).
+
+    For leakage-free imputation where the median must come from train only, use
+    :func:`fit_missing_numeric` + :func:`transform_missing_numeric`.
+    """
     df = df.copy()
     imputer = SimpleImputer(strategy="median")
     missing_cols = [c for c in numeric_cols if c in df.columns and df[c].isna().any()]
     if missing_cols:
         df[missing_cols] = imputer.fit_transform(df[missing_cols])
+    return df
+
+
+def fit_missing_numeric(
+    df: pd.DataFrame, numeric_cols: list[str]
+) -> tuple[SimpleImputer, list[str]]:
+    """Fit a median imputer on a (train) frame only.
+
+    Returns ``(imputer, fitted_cols)`` so :func:`transform_missing_numeric`
+    can supply the exact column order/name set the imputer was fit on
+    (sklearn validates feature names and rejects mismatches).
+    """
+    imputer = SimpleImputer(strategy="median")
+    cols = [c for c in numeric_cols if c in df.columns]
+    if cols:
+        imputer.fit(df[cols])
+    return imputer, cols
+
+
+def transform_missing_numeric(
+    df: pd.DataFrame, numeric_cols: list[str], imputer: SimpleImputer
+) -> pd.DataFrame:
+    """Apply a fitted imputer to a frame (used for the test set).
+
+    Transforms only the columns present in ``df`` that the imputer knows about,
+    supplying them in the imputer's fitted name order. Rows/columns with no
+    missing values pass through unchanged.
+    """
+    df = df.copy()
+    # Use the imputer's fitted feature names when available, intersected with
+    # what's present in this frame, so sklearn's name validation is satisfied.
+    fitted = getattr(imputer, "feature_names_in_", None)
+    if fitted is not None:
+        cols = [c for c in fitted if c in df.columns]
+    else:
+        cols = [c for c in numeric_cols if c in df.columns]
+    if cols:
+        has_missing = [c for c in cols if df[c].isna().any()]
+        if has_missing:
+            # Transform the full fitted subset present, write back only needed.
+            transformed = imputer.transform(df[cols])
+            df[cols] = transformed
     return df
 
 
@@ -68,7 +148,13 @@ def handle_missing_categorical(df: pd.DataFrame, cat_cols: list[str]) -> pd.Data
 
 
 def preprocess(train_df: pd.DataFrame, test_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Full preprocessing pipeline."""
+    """Full preprocessing pipeline.
+
+    Leakage-free: all fit-able statistics (outlier boundaries, median imputation)
+    are estimated from the **train** frame only, then applied to test. The two
+    frames are no longer concatenated before fitting, so test rows cannot
+    influence train-row preprocessing.
+    """
     # Separate target
     y = train_df[TARGET_COL].copy()
     train_df = train_df.drop(columns=[TARGET_COL])
@@ -89,27 +175,26 @@ def preprocess(train_df: pd.DataFrame, test_df: pd.DataFrame) -> tuple[pd.DataFr
     print(f"Numeric columns: {len(numeric_cols)}")
     print(f"Categorical columns: {len(cat_cols)}")
 
-    # Combine for consistent preprocessing
-    combined = pd.concat([train_df, test_df], axis=0, ignore_index=True)
-    n_train = len(train_df)
+    # Outlier capping — boundaries from train only, applied to both
+    print("Capping outliers (fit on train only) ...")
+    bounds = compute_outlier_bounds(train_df, numeric_cols)
+    train_df = cap_outliers_with_bounds(train_df, bounds)
+    test_df = cap_outliers_with_bounds(test_df, bounds)
 
-    # Outlier capping
-    print("Capping outliers ...")
-    combined = cap_outliers(combined, numeric_cols)
+    # Missing value handling — imputer fit on train only
+    print("Imputing missing values (fit on train only) ...")
+    imputer, _fitted_cols = fit_missing_numeric(train_df, numeric_cols)
+    train_df = transform_missing_numeric(train_df, numeric_cols, imputer)
+    test_df = transform_missing_numeric(test_df, numeric_cols, imputer)
 
-    # Missing value handling
-    print("Imputing missing values ...")
-    combined = handle_missing_numeric(combined, numeric_cols)
-    combined = handle_missing_categorical(combined, cat_cols)
-
-    # Split back
-    train_clean = combined.iloc[:n_train].copy()
-    test_clean = combined.iloc[n_train:].copy()
+    # Categorical fill is target-free, so safe on each frame independently
+    train_df = handle_missing_categorical(train_df, cat_cols)
+    test_df = handle_missing_categorical(test_df, cat_cols)
 
     # Reattach target
-    train_clean[TARGET_COL] = y.values
+    train_df[TARGET_COL] = y.values
 
-    return train_clean, test_clean
+    return train_df, test_df
 
 
 def main():

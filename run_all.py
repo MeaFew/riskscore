@@ -13,11 +13,13 @@ from pathlib import Path
 os.environ.setdefault("PYTHONUTF8", "1")
 
 
-def run(cmd: str, cwd: Path | None = None):
+def run(cmd: list[str], cwd: Path | None = None):
     print(f"\n{'=' * 60}")
-    print(f">>> {cmd}")
+    print(f">>> {' '.join(cmd)}")
     print("=" * 60)
-    result = subprocess.run(cmd, shell=True, cwd=cwd)
+    # Pass cmd as a list and avoid shell=True — no shell injection surface and
+    # correct argv splitting even if a path contains spaces.
+    result = subprocess.run(cmd, cwd=cwd)
     if result.returncode != 0:
         print(f"WARNING: Command failed with exit code {result.returncode}")
         return False
@@ -28,11 +30,11 @@ def main():
     here = Path(__file__).resolve().parent
 
     steps = [
-        ("Preprocessing", "python scripts/preprocess.py"),
-        ("Feature Engineering", "python scripts/feature_engineering.py"),
-        ("Model Training", "python scripts/train_models.py"),
-        ("Evaluation", "python scripts/evaluate.py"),
-        ("SHAP Analysis", "python scripts/shap_analysis.py"),
+        ("Preprocessing", ["python", "scripts/preprocess.py"]),
+        ("Feature Engineering", ["python", "scripts/feature_engineering.py"]),
+        ("Model Training", ["python", "scripts/train_models.py"]),
+        ("Evaluation", ["python", "scripts/evaluate.py"]),
+        ("SHAP Analysis", ["python", "scripts/shap_analysis.py"]),
     ]
 
     print("Credit Risk Scoring - Full Pipeline")

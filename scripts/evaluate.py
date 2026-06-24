@@ -1,11 +1,20 @@
 """Model evaluation and calibration for riskscore.
 
-Generates:
+Generates (using leakage-free OUT-OF-FOLD predictions on the training set):
 - ROC curve plot
 - Precision-Recall curve plot
 - Calibration plot (reliability diagram)
 - Score distribution plot
 - Confusion matrix at optimal threshold
+
+The Home Credit ``application_test.csv`` ships WITHOUT a TARGET column, so
+there is no labeled holdout to evaluate against. Rather than fabricate a "test
+AUC" by retraining on a training subset and scoring it (a resubstitution /
+leakage artifact), this module reports metrics on OUT-OF-FOLD (OOF) predictions
+produced by the same leakage-free per-fold pipeline used in training: each row's
+score comes from a model that did NOT see that row during fitting. OOF metrics
+are a faithful estimate of generalization and are comparable to the reported
+5-fold CV AUC.
 """
 
 import argparse
@@ -13,7 +22,6 @@ import json
 import sys
 from pathlib import Path
 
-import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -22,19 +30,19 @@ from sklearn.metrics import (
     auc,
     confusion_matrix,
     precision_recall_curve,
+    roc_auc_score,
     roc_curve,
 )
+from sklearn.model_selection import StratifiedKFold
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from metrics_utils import ks_score
 
 from config import (
-    FEATURES_TEST_CSV,
     FEATURES_TRAIN_CSV,
     IMAGES_DIR,
     MODEL_PATH,
     MODEL_RESULTS_JSON,
-    MODELS_DIR,
     RANDOM_STATE,
     REPORTS_DIR,
     TARGET_COL,
@@ -53,7 +61,7 @@ def plot_roc_curve(y_true, y_proba, save_path: Path):
     ax.set_ylim([0.0, 1.05])
     ax.set_xlabel("False Positive Rate")
     ax.set_ylabel("True Positive Rate")
-    ax.set_title("ROC Curve")
+    ax.set_title("ROC Curve (Out-of-Fold)")
     ax.legend(loc="lower right")
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
@@ -72,7 +80,7 @@ def plot_pr_curve(y_true, y_proba, save_path: Path):
     ax.axhline(baseline, color="k", linestyle="--", lw=1, label=f"Baseline ({baseline:.3f})")
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
-    ax.set_title("Precision-Recall Curve")
+    ax.set_title("Precision-Recall Curve (Out-of-Fold)")
     ax.legend(loc="lower left")
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
@@ -89,7 +97,7 @@ def plot_calibration(y_true, y_proba, save_path: Path):
     ax.plot([0, 1], [0, 1], "k--", label="Perfectly calibrated")
     ax.set_xlabel("Mean predicted probability")
     ax.set_ylabel("Fraction of positives")
-    ax.set_title("Calibration Plot (Reliability Diagram)")
+    ax.set_title("Calibration Plot (Out-of-Fold, Reliability Diagram)")
     ax.legend(loc="lower right")
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
@@ -108,7 +116,7 @@ def plot_score_distribution(y_true, y_proba, save_path: Path):
     )
     ax.set_xlabel("Predicted Probability")
     ax.set_ylabel("Density")
-    ax.set_title("Score Distribution by Actual Outcome")
+    ax.set_title("Score Distribution by Actual Outcome (Out-of-Fold)")
     ax.legend()
     fig.tight_layout()
     fig.savefig(save_path, dpi=150)
@@ -124,98 +132,103 @@ def find_optimal_threshold(y_true, y_proba):
     return thresholds[optimal_idx]
 
 
-def evaluate_model(model, X_test, y_test):
-    """Full evaluation pipeline."""
-    y_proba = model.predict_proba(X_test)[:, 1]
-    threshold = find_optimal_threshold(y_test, y_proba)
+def produce_oof_predictions(model_name: str, X: pd.DataFrame, y: pd.Series, cv: int = 5):
+    """Generate leakage-free out-of-fold predictions for one model.
+
+    A fresh ``TargetEncoder -> classifier`` pipeline is fit per fold on the
+    training split only (imported lazily from train_models to share the factory).
+    Each row's predicted probability therefore comes from a model that never
+    saw that row — a faithful generalization estimate, not a resubstitution one.
+    """
+    from train_models import make_pipeline
+
+    skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=RANDOM_STATE)
+    oof = np.full(len(X), np.nan, dtype=float)
+    use_early_stop = model_name in ("xgboost", "lightgbm")
+
+    from train_models import _eval_set_fit
+
+    for train_idx, val_idx in skf.split(X, y):
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+        pipeline = make_pipeline(model_name, X)
+        if use_early_stop:
+            _eval_set_fit(pipeline, X_train, y_train, X_val, y_val)
+        else:
+            pipeline.fit(X_train, y_train)
+        oof[val_idx] = pipeline.predict_proba(X_val)[:, 1]
+
+    return oof
+
+
+def evaluate_oof(y_true, y_proba):
+    """Compute metrics from OOF predictions and the optimal-threshold confusion matrix."""
+    threshold = find_optimal_threshold(y_true, y_proba)
     y_pred = (y_proba >= threshold).astype(int)
 
-    # Metrics
     from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-    from sklearn.metrics import roc_auc_score as sk_auc
 
-    tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
 
     metrics = {
-        "auc": float(sk_auc(y_test, y_proba)),
-        "ks": float(ks_score(y_test, y_proba)),
-        "gini": float(2 * sk_auc(y_test, y_proba) - 1),
+        "auc": float(roc_auc_score(y_true, y_proba)),
+        "ks": float(ks_score(y_true, y_proba)),
+        "gini": float(2 * roc_auc_score(y_true, y_proba) - 1),
         "threshold": float(threshold),
-        "accuracy": float(accuracy_score(y_test, y_pred)),
-        "precision": float(precision_score(y_test, y_pred, zero_division=0)),
-        "recall": float(recall_score(y_test, y_pred, zero_division=0)),
-        "f1": float(f1_score(y_test, y_pred, zero_division=0)),
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
+        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
+        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
         "confusion_matrix": {"tp": int(tp), "fp": int(fp), "tn": int(tn), "fn": int(fn)},
     }
 
-    print("\nTest Set Metrics:")
+    print("\nOut-of-Fold Metrics (leakage-free):")
     print(f"  AUC:    {metrics['auc']:.4f}")
     print(f"  KS:     {metrics['ks']:.4f}")
     print(f"  Gini:   {metrics['gini']:.4f}")
     print(f"  F1:     {metrics['f1']:.4f}")
     print(f"  Threshold: {metrics['threshold']:.4f}")
-
-    # Plots
-    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-    plot_roc_curve(y_test, y_proba, IMAGES_DIR / "roc_curve.png")
-    plot_pr_curve(y_test, y_proba, IMAGES_DIR / "pr_curve.png")
-    plot_calibration(y_test, y_proba, IMAGES_DIR / "calibration.png")
-    plot_score_distribution(y_test, y_proba, IMAGES_DIR / "score_distribution.png")
-
     return metrics
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--train", type=Path, default=FEATURES_TRAIN_CSV)
-    parser.add_argument("--test", type=Path, default=FEATURES_TEST_CSV)
     args = parser.parse_args()
 
     print(f"Loading train: {args.train}")
     train_df = pd.read_csv(args.train)
-    print(f"Loading test: {args.test}")
-    test_df = pd.read_csv(args.test)
 
-    y_train = train_df[TARGET_COL]
-    X_train = train_df.drop(columns=[TARGET_COL, "SK_ID_CURR"])
+    y = train_df[TARGET_COL]
+    X = train_df.drop(columns=[TARGET_COL, "SK_ID_CURR"])
 
-    if TARGET_COL in test_df.columns:
-        y_test = test_df[TARGET_COL]
-        X_test = test_df.drop(columns=[TARGET_COL, "SK_ID_CURR"])
-    else:
-        # No target in test — split train for evaluation
-        print("Test set has no TARGET - splitting train 80/20 for evaluation ...")
-        from sklearn.model_selection import train_test_split
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_train, y_train, test_size=0.2, random_state=RANDOM_STATE, stratify=y_train
-        )
-
-    # Load best model from CV results (read JSON once)
     with open(MODEL_RESULTS_JSON) as f:
         results = json.load(f)
-    best_name = results.get("best_model", "xgboost")
+    best_name = results.get("best_model", "lightgbm")
+    print(f"Best model from CV: {best_name}")
 
-    # Resolve the persisted model file via the shared helper (kept consistent
-    # with shap_analysis.py and the dashboard).
-    from metrics_utils import find_best_model_path
+    # No labeled test set exists (Home Credit application_test.csv has no
+    # TARGET). Report leakage-free OUT-OF-FOLD metrics on the training set
+    # rather than fabricating a "test AUC" by resubstitution.
+    print(
+        "No labeled test set available — producing leakage-free OUT-OF-FOLD "
+        "predictions for evaluation ..."
+    )
+    oof_proba = produce_oof_predictions(best_name, X, y)
+    y_arr = y.to_numpy()
 
-    model_path = find_best_model_path(MODELS_DIR, MODEL_PATH.stem, best_name)
+    metrics = evaluate_oof(y_arr, oof_proba)
 
-    if best_name == "xgboost" and model_path.suffix == ".json":
-        import xgboost as xgb
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    plot_roc_curve(y_arr, oof_proba, IMAGES_DIR / "roc_curve.png")
+    plot_pr_curve(y_arr, oof_proba, IMAGES_DIR / "pr_curve.png")
+    plot_calibration(y_arr, oof_proba, IMAGES_DIR / "calibration.png")
+    plot_score_distribution(y_arr, oof_proba, IMAGES_DIR / "score_distribution.png")
 
-        model = xgb.XGBClassifier()
-        model.load_model(str(model_path))
-    else:
-        model = joblib.load(str(model_path))
-    print(f"Loaded model from {model_path}")
-
-    metrics = evaluate_model(model, X_test, y_test)
-
-    # Save results (reuse already-loaded results dict)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    results["test_metrics"] = metrics
+    results["oof_metrics"] = metrics
+    # Persist OOF predictions for reproducibility / downstream use.
+    np.save(REPORTS_DIR / "oof_predictions.npy", oof_proba)
     with open(MODEL_RESULTS_JSON, "w") as f:
         json.dump(results, f, indent=2)
 

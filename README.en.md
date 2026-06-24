@@ -12,7 +12,7 @@ End-to-end credit risk scoring pipeline built on the Kaggle Home Credit Default 
 
 ## Key Highlights
 
-- **Feature Engineering**: WOE binning, IV-based selection, target encoding, cross-features
+- **Feature Engineering**: WOE binning (analytic reference), per-fold target encoding (leakage-free), cross-features
 - **Model Stack**: Logistic Regression (baseline) -> Random Forest -> XGBoost -> LightGBM
 - **Evaluation**: AUC, KS, Gini, calibration, confusion matrix at optimal threshold
 - **Interpretability**: SHAP summary, dependence plots, force plot for individual cases
@@ -63,7 +63,7 @@ make verify
 ├── scripts/
 │   ├── generate_mock_data.py     # Synthetic data generator (for CI)
 │   ├── preprocess.py              # Data cleaning & missing value handling
-│   ├── feature_engineering.py     # WOE/IV, target encoding, cross-features
+│   ├── feature_engineering.py     # cross-features + WOE/IV analytic report (target encoding moved into CV Pipeline)
 │   ├── train_models.py            # LR / RF / XGB / LGBM with CV
 │   ├── evaluate.py                # ROC, PR, calibration, confusion matrix
 │   └── shap_analysis.py           # SHAP summary, dependence, force plots
@@ -89,21 +89,29 @@ Based on [Kaggle Home Credit Default Risk](https://www.kaggle.com/competitions/h
 | Single-table LightGBM | 0.749 | Same as above, gradient boosting |
 | Competition Median | ~0.72-0.75 | Leaderboard median |
 | Competition Top 10% | ~0.795 | Multi-table features + ensemble |
-| **This Project (single-table)** | **0.763** | WOE/IV + target encoding + XGBoost/LightGBM (5-fold CV) |
+| **This Project (single-table)** | **0.766** | Per-fold target encoding (leakage-free) + XGBoost/LightGBM (5-fold CV / OOF) |
 | This Project (multi-table, planned) | ~0.78 (projected) | Requires full auxiliary tables; this repo implements single-table only |
 
-> Note: Competition Private Leaderboard is closed. Scores above are from local 5-fold stratified cross-validation on real Kaggle data (307,511 train / 48,744 test). Multi-table results require running `scripts/aggregate_auxiliary_features.py` and `scripts/merge_auxiliary_features.py` before `make features`.
+> Note: Competition Private Leaderboard is closed. Scores above are from local 5-fold stratified cross-validation plus leakage-free out-of-fold (OOF) evaluation on real Kaggle data (307,511 train samples, `application_train`). Multi-table results require running `scripts/aggregate_auxiliary_features.py` and `scripts/merge_auxiliary_features.py` before `make features`.
 
 ### Results
 
 | Model | AUC | KS | Gini |
 |-------|-----|-----|------|
-| Logistic Regression | 0.654 | 0.233 | 0.308 |
-| Random Forest | 0.745 | 0.366 | 0.490 |
-| XGBoost | **0.762** | **0.394** | **0.525** |
-| LightGBM | **0.763** | **0.394** | **0.525** |
+| Logistic Regression | 0.626 | 0.192 | 0.251 |
+| Random Forest | 0.746 | 0.365 | 0.491 |
+| XGBoost | **0.766** | **0.399** | **0.533** |
+| LightGBM | **0.766** | **0.398** | **0.532** |
 
-> Values from 5-fold stratified cross-validation on real Kaggle data (307,511 samples) with single-table features (application_train only). Hold-out test set (80/20 split) AUC = **0.801** (XGBoost). Multi-table features (bureau, previous_application, etc.) can further improve AUC by running the auxiliary aggregation scripts.
+> Values from 5-fold stratified cross-validation on real Kaggle data (307,511 samples) with single-table features (application_train only). Target encoding is fit **per CV fold inside a sklearn Pipeline** (validation rows never encode their own target — no leakage). XGBoost OOF AUC = **0.766** (each row scored by a model that never saw it — a faithful generalization estimate).
+
+### Leakage fixes (important)
+
+This pipeline corrects two common credit-scoring leakage patterns:
+
+- **Target-encoding leakage**: an earlier version computed target encoding on the full training set, then fed it into 5-fold CV — so a validation row's own target leaked into its encoded feature and inflated AUC. Target encoding now lives in a sklearn `Pipeline` and is fit on each fold's training split only. IV-based feature selection was removed from the modeling path (kept only as the analytic `data/processed/iv_report.csv`) to avoid the same class of leak via "select features with the full-set target, then use them inside CV folds".
+- **Fabricated test AUC**: Home Credit's `application_test.csv` has no `TARGET`, so there is no labeled holdout. An earlier version split the training set 80/20, retrained on the full data, and evaluated — producing a 0.80 "test AUC" that was a resubstitution number and, worse, higher than the honest CV AUC. This metric was removed; we now report OOF AUC.
+- **Preprocessing leakage**: outlier caps and median imputation are now fit on train only, then transformed onto test.
 
 ## Related Projects
 

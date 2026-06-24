@@ -32,40 +32,25 @@ from config import (
 
 
 def load_model():
-    """Load the best trained model, auto-detecting file format."""
-    # Read best model name from results
+    """Load the best trained model pipeline (preprocess + classifier).
+
+    Since the leakage fix, the persisted artifact is a full sklearn ``Pipeline``
+    (joblib) — the native XGBoost ``.json`` no longer carries the fitted
+    target-encoder and must not be loaded on its own. Returns ``(pipeline,
+    best_name)`` so callers can pick the right SHAP explainer.
+    """
     with open(MODEL_RESULTS_JSON) as f:
         results = json.load(f)
-    best_name = results.get("best_model", "xgboost")
+    best_name = results.get("best_model", "lightgbm")
 
-    json_path = MODEL_PATH.with_suffix(".json")
     joblib_path = MODEL_PATH.with_suffix(".joblib")
-    if best_name == "xgboost" and json_path.exists():
-        import xgboost as xgb
-
-        model = xgb.XGBClassifier()
-        model.load_model(str(json_path))
-        return model
-    elif joblib_path.exists():
-        return joblib.load(str(joblib_path))
-    else:
-        # Last resort: any model file in MODELS_DIR
-        candidates = list(MODEL_PATH.parent.glob("*_risk_model.*"))
-        if candidates:
-            p = candidates[0]
-            # Only attempt XGBoost native loading for .json if best_model is xgboost
-            if best_name == "xgboost" and p.suffix == ".json":
-                import xgboost as xgb
-
-                model = xgb.XGBClassifier()
-                model.load_model(str(p))
-                return model
-            elif p.suffix == ".joblib":
-                return joblib.load(str(p))
-            else:
-                # Non-xgboost .json files can't be loaded here; prefer .joblib
-                raise FileNotFoundError(f"No compatible model file found for stem {MODEL_PATH}")
-        raise FileNotFoundError(f"No model file found for stem {MODEL_PATH}")
+    if not joblib_path.exists():
+        raise FileNotFoundError(
+            f"Pipeline model not found at {joblib_path}. "
+            "Run 'python scripts/train_models.py' first. (The leakage-free "
+            "artifact is the full pipeline, not the bare XGBoost .json.)"
+        )
+    return joblib.load(str(joblib_path)), best_name
 
 
 def plot_shap_summary(shap_values, X_sample, feature_names, save_path: Path):
@@ -121,16 +106,36 @@ def main():
     train_df = pd.read_csv(args.train)
     X_train = train_df.drop(columns=[TARGET_COL, "SK_ID_CURR"])
 
-    print("Loading model ...")
-    model = load_model()
-    # Model is already trained — use loaded parameters directly for SHAP
+    print("Loading model pipeline ...")
+    pipeline, best_name = load_model()
+    preprocessor = pipeline.named_steps["preprocess"]
+    estimator = pipeline.named_steps["model"]
 
-    # Sample for SHAP computation (too slow on full data)
+    # Sample for SHAP computation (too slow on full data), then transform
+    # through the FITTED pipeline preprocessor so SHAP sees encoded features
+    # exactly as the estimator was trained on them.
     X_sample = X_train.sample(n=min(args.sample, len(X_train)), random_state=RANDOM_STATE)
+    X_encoded = preprocessor.transform(X_sample)
+    feature_names = list(preprocessor.get_feature_names_out())
+    if hasattr(X_encoded, "toarray"):  # sparse from any future one-hot step
+        X_encoded = pd.DataFrame(X_encoded.toarray(), columns=feature_names, index=X_sample.index)
+    elif not isinstance(X_encoded, pd.DataFrame):
+        # ColumnTransformer may hand back an object-dtyped ndarray when the
+        # passthrough columns are pandas 'str' dtype. Coerce to a clean
+        # numeric frame so tree explainers (which require float input) accept it.
+        import numpy as _np
 
-    print(f"Computing SHAP values on {len(X_sample)} training samples ...")
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X_sample)
+        X_encoded = pd.DataFrame(
+            _np.asarray(X_encoded, dtype=float), columns=feature_names, index=X_sample.index
+        )
+
+    print(f"Computing SHAP values on {len(X_sample)} training samples ({best_name}) ...")
+    # Pick the explainer by model family (TreeExplainer only works on trees).
+    if best_name in ("xgboost", "lightgbm", "random_forest"):
+        explainer = shap.TreeExplainer(estimator)
+    else:
+        explainer = shap.LinearExplainer(estimator, X_encoded)
+    shap_values = explainer.shap_values(X_encoded)
 
     # For binary classification, TreeExplainer may return a list
     if isinstance(shap_values, list):
@@ -138,16 +143,20 @@ def main():
 
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-    feature_names = X_sample.columns.tolist()
+    feature_names = (
+        X_encoded.columns.tolist()
+        if isinstance(X_encoded, pd.DataFrame)
+        else [f"f{i}" for i in range(X_encoded.shape[1])]
+    )
 
     # Summary plot
     print("Generating SHAP summary plot ...")
-    plot_shap_summary(shap_values, X_sample, feature_names, SHAP_SUMMARY_PNG)
+    plot_shap_summary(shap_values, X_encoded, feature_names, SHAP_SUMMARY_PNG)
 
     # Top features bar chart
     print("Generating feature importance plot ...")
     top_features = plot_top_features(
-        shap_values, X_sample, feature_names, top_n=10, save_dir=IMAGES_DIR
+        shap_values, X_encoded, feature_names, top_n=10, save_dir=IMAGES_DIR
     )
 
     # Dependence plots for top 3 features
@@ -157,7 +166,7 @@ def main():
         shap.dependence_plot(
             feat,
             shap_values,
-            X_sample,
+            X_encoded,
             feature_names=feature_names,
             show=False,
             ax=ax,
@@ -175,7 +184,7 @@ def main():
         if isinstance(explainer.expected_value, list)
         else explainer.expected_value,
         shap_values[0],
-        X_sample.iloc[0],
+        X_encoded.iloc[0],
         feature_names=feature_names,
         show=False,
     )

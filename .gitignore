@@ -67,6 +67,8 @@ data/external/
 # Models / outputs
 models/
 *.pkl
+# Per-row out-of-fold predictions are run artifacts (regenerable), not source.
+reports/*.npy
 *.joblib
 *.pt
 *.pth

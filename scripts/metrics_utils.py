@@ -19,30 +19,3 @@ def ks_score(y_true, y_proba) -> float:
     pos = y_proba[y_true == 1]
     neg = y_proba[y_true == 0]
     return _scipy_stats.ks_2samp(pos, neg).statistic
-
-
-def find_best_model_path(models_dir, model_stem, best_name: str = "xgboost"):
-    """Locate the persisted best-model file under ``models_dir``.
-
-    Resolution order (deterministic): for XGBoost prefer the native ``.json``
-    checkpoint, for other models prefer ``.joblib``; then fall back to a
-    ``{best_name}_risk_model.*`` naming convention, then to any
-    ``*_risk_model.*`` file in the directory. Currently used by evaluate.py;
-    shap_analysis.py and the dashboard keep their own loaders (which also need
-    the XGBoost-native vs joblib deserialization choice, not just the path).
-
-    Returns the resolved Path, or raises FileNotFoundError.
-    """
-    ext_order = (".json", ".joblib") if best_name == "xgboost" else (".joblib", ".json")
-    for ext in ext_order:
-        candidate = models_dir / f"{model_stem}{ext}"
-        if candidate.exists():
-            return candidate
-    for ext in ext_order:
-        candidate = models_dir / f"{best_name}_risk_model{ext}"
-        if candidate.exists():
-            return candidate
-    candidates = sorted(models_dir.glob("*_risk_model.*"))
-    if candidates:
-        return candidates[0]
-    raise FileNotFoundError(f"No model file found in {models_dir}")

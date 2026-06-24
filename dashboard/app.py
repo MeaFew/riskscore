@@ -54,21 +54,13 @@ def load_data():
 
 @st.cache_resource
 def load_model():
-    json_path = MODEL_PATH.with_suffix(".json")
     joblib_path = MODEL_PATH.with_suffix(".joblib")
-    if not json_path.exists() and not joblib_path.exists():
+    if not joblib_path.exists():
         st.error("Model file not found. Run `make train` first.")
         st.stop()
-    # Read best model name to choose loader
-    with open(MODEL_RESULTS_JSON) as f:
-        results = json.load(f)
-    best_name = results.get("best_model", "xgboost")
-    if best_name == "xgboost" and json_path.exists():
-        import xgboost as xgb
-
-        model = xgb.XGBClassifier()
-        model.load_model(str(json_path))
-        return model
+    # The persisted artifact is the full TargetEncoder->classifier pipeline
+    # (joblib); it self-encodes categorical columns, so callers can pass raw
+    # feature frames straight to predict_proba.
     return joblib.load(str(joblib_path))
 
 
@@ -214,7 +206,9 @@ def main():
         st.plotly_chart(fig, use_container_width=True)
 
         # Confusion matrix
-        threshold = results.get("test_metrics", {}).get("threshold", 0.5)
+        threshold = results.get("oof_metrics", results.get("test_metrics", {})).get(
+            "threshold", 0.5
+        )
         y_pred = (y_proba >= threshold).astype(int)
         cm = pd.crosstab(y_eval, y_pred, rownames=["Actual"], colnames=["Predicted"])
         st.subheader("Confusion Matrix")
@@ -225,11 +219,19 @@ def main():
         st.header("Feature Importance")
 
         model = load_model()
-        if hasattr(model, "feature_importances_"):
-            importances = model.feature_importances_
-            features = test_df.drop(
-                columns=["SK_ID_CURR", TARGET_COL], errors="ignore"
-            ).columns.tolist()
+        # model is now a Pipeline; the estimator is the last step.
+        estimator = model.named_steps.get("model", model)
+        if hasattr(estimator, "feature_importances_"):
+            importances = estimator.feature_importances_
+            # Use the fitted preprocessor's output feature names so the bars
+            # line up with the encoded columns the estimator actually saw.
+            preprocessor = model.named_steps.get("preprocess")
+            try:
+                features = list(preprocessor.get_feature_names_out())
+            except Exception:
+                features = test_df.drop(
+                    columns=["SK_ID_CURR", TARGET_COL], errors="ignore"
+                ).columns.tolist()
             imp_df = pd.DataFrame({"Feature": features, "Importance": importances})
             imp_df = imp_df.sort_values("Importance", ascending=True).tail(15)
 
@@ -238,7 +240,7 @@ def main():
                 x="Importance",
                 y="Feature",
                 orientation="h",
-                title="Top 15 Features (XGBoost)",
+                title="Top 15 Features (gradient boosting)",
                 template="plotly_white",
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -270,8 +272,17 @@ def main():
         cols = st.columns(3)
         for i, feat in enumerate(features):
             with cols[i % 3]:
-                default_val = float(sample[feat]) if feat in sample else 0.0
-                user_input[feat] = st.number_input(feat, value=default_val, key=feat)
+                default = sample[feat] if feat in sample else ""
+                if isinstance(default, str):
+                    # Categorical column — let the pipeline's TargetEncoder
+                    # handle it; offer the observed value as default text.
+                    user_input[feat] = st.text_input(feat, value=str(default), key=feat)
+                else:
+                    try:
+                        default_val = float(default)
+                    except (TypeError, ValueError):
+                        default_val = 0.0
+                    user_input[feat] = st.number_input(feat, value=default_val, key=feat)
 
         input_df = pd.DataFrame([user_input])
         proba = model.predict_proba(input_df)[0, 1]

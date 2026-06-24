@@ -6,6 +6,13 @@ Models:
 - XGBoost (gradient boosting, industry standard)
 - LightGBM (gradient boosting, faster training)
 
+Each model is wrapped in a sklearn ``Pipeline`` of the form
+``TargetEncoder -> classifier``. The target encoder transforms high-cardinality
+categorical columns, and because it lives inside the pipeline it is fit on each
+CV fold's training split only — so validation rows never encode their own
+target (leakage fix). The persisted artifact is the full pipeline, so SHAP /
+evaluation / dashboard all consume a leakage-free, self-contained model.
+
 Output: trained models + cross-validation results JSON.
 """
 
@@ -20,10 +27,13 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import TargetEncoder
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from metrics_utils import ks_score
@@ -53,25 +63,90 @@ def gini_score(y_true, y_proba):
     return 2 * roc_auc_score(y_true, y_proba) - 1
 
 
-def cross_validate_model(model, X, y, cv=5, fit_kwargs=None):
-    """Stratified K-Fold cross-validation with AUC, KS, Gini.
+def _split_cat_numeric(X: pd.DataFrame) -> tuple[list[str], list[str]]:
+    """Identify high-cardinality categoricals (target-encoded) vs everything else.
 
-    ``fit_kwargs`` (if given) is called as ``fit_kwargs(X_tr, y_tr, X_val,
-    y_val)`` and must return a dict of extra kwargs to pass to ``model.fit`` —
-    used by XGBoost/LightGBM to supply ``eval_set`` for early stopping.
+    Low-cardinality categoricals were already one-hot encoded upstream in
+    feature_engineering, so any remaining string/object columns are the high-card
+    TE candidates. Numeric columns pass through untouched. Both 'object' (legacy)
+    and pandas 'string' dtypes are treated as categorical so this is robust
+    across pandas 2 (object) and pandas 3/4 (string).
+    """
+    cat_cols = X.select_dtypes(include=["object", "string"]).columns.tolist()
+    numeric_cols = [c for c in X.columns if c not in cat_cols]
+    return cat_cols, numeric_cols
+
+
+def make_pipeline(model_name: str, X: pd.DataFrame) -> Pipeline:
+    """Build a fresh ``TargetEncoder -> classifier`` pipeline for one model.
+
+    A new pipeline (with fresh, unfitted steps) is created for each CV fold via
+    this factory, so no fold inherits a partially-fit encoder from another.
+    """
+    cat_cols, numeric_cols = _split_cat_numeric(X)
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("te", TargetEncoder(target_type="binary", random_state=RANDOM_STATE), cat_cols),
+        ],
+        remainder="passthrough",  # numeric cols pass through untouched
+        verbose_feature_names_out=False,
+    )
+
+    if model_name == "logistic_regression":
+        clf = LogisticRegression(
+            max_iter=1000, class_weight="balanced", random_state=RANDOM_STATE, solver="lbfgs"
+        )
+    elif model_name == "random_forest":
+        clf = RandomForestClassifier(**RF_PARAMS)
+    elif model_name == "xgboost":
+        clf = xgb.XGBClassifier(
+            **{k: v for k, v in XGB_PARAMS.items() if k not in ("early_stopping_rounds",)}
+        )
+    elif model_name == "lightgbm":
+        clf = lgb.LGBMClassifier(
+            **{k: v for k, v in LGB_PARAMS.items() if k not in ("early_stopping_rounds", "verbose")}
+        )
+    else:
+        raise ValueError(f"Unknown model: {model_name}")
+
+    return Pipeline([("preprocess", preprocessor), ("model", clf)])
+
+
+def _eval_set_fit(pipeline: Pipeline, X_train, y_train, X_val, y_val):
+    """Fit a pipeline while passing the val split as eval_set for tree early stopping.
+
+    sklearn pipelines route fit kwargs only to the LAST step, so we fit the
+    preprocessing on train, transform both splits, then fit the estimator with
+    ``eval_set``. This mirrors the previous early-stopping behavior while
+    keeping the encoder leakage-free (fit on train split only).
+    """
+    # Only XGBoost/LightGBM reach here. Fit preprocess on train split only.
+    Xt = pipeline.named_steps["preprocess"].fit_transform(X_train, y_train)
+    Xv = pipeline.named_steps["preprocess"].transform(X_val)
+    pipeline.named_steps["model"].fit(Xt, y_train, eval_set=[(Xv, y_val)])
+
+
+def cross_validate_model(model_name: str, X, y, cv=5):
+    """Stratified K-Fold cross-validation with a fresh leakage-free pipeline per fold.
+
+    For XGBoost/LightGBM the validation split is supplied as ``eval_set`` for
+    early stopping (mirroring the original behavior), with preprocessing fit
+    on the training split only.
     """
     skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=RANDOM_STATE)
+    use_early_stop = model_name in ("xgboost", "lightgbm")
 
     aucs, kss, ginis = [], [], []
     for train_idx, val_idx in skf.split(X, y):
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-        extra = {}
-        if fit_kwargs is not None:
-            extra = fit_kwargs(X_train, y_train, X_val, y_val) or {}
-        model.fit(X_train, y_train, **extra)
-        y_proba = model.predict_proba(X_val)[:, 1]
+        pipeline = make_pipeline(model_name, X)
+        if use_early_stop:
+            _eval_set_fit(pipeline, X_train, y_train, X_val, y_val)
+        else:
+            pipeline.fit(X_train, y_train)
+        y_proba = pipeline.predict_proba(X_val)[:, 1]
 
         aucs.append(roc_auc_score(y_val, y_proba))
         kss.append(ks_score(y_val, y_proba))
@@ -87,46 +162,34 @@ def cross_validate_model(model, X, y, cv=5, fit_kwargs=None):
     }
 
 
-def _eval_set_kwargs(X_tr, y_tr, X_val, y_val):
-    """fit_kwargs callback: pass the val split as eval_set for early stopping."""
-    return {"eval_set": [(X_val, y_val)]}
+MODEL_NAMES = ["logistic_regression", "random_forest", "xgboost", "lightgbm"]
 
 
-def train_logistic_regression(X, y):
-    """Train logistic regression with class weight balancing."""
-    print("Training Logistic Regression ...")
-    model = LogisticRegression(
-        class_weight="balanced",
-        max_iter=1000,
-        random_state=RANDOM_STATE,
-        solver="lbfgs",
-    )
-    return model, cross_validate_model(model, X, y)
+def train_all(X, y):
+    """Cross-validate every model and return results dict."""
+    results = {}
+    for name in MODEL_NAMES:
+        print(f"Training {name} ...")
+        results[name] = cross_validate_model(name, X, y)
+    return results
 
 
-def train_random_forest(X, y):
-    """Train random forest."""
-    print("Training Random Forest ...")
-    model = RandomForestClassifier(**RF_PARAMS)
-    return model, cross_validate_model(model, X, y)
+def retrain_best(model_name: str, X, y):
+    """Retrain the best model's pipeline on the FULL training set for deployment."""
+    pipeline = make_pipeline(model_name, X)
+    if model_name == "xgboost":
+        from sklearn.model_selection import train_test_split as _tts
 
+        X_rt, X_val, y_rt, y_val = _tts(X, y, test_size=0.1, random_state=RANDOM_STATE, stratify=y)
+        _eval_set_fit(pipeline, X_rt, y_rt, X_val, y_val)
+    elif model_name == "lightgbm":
+        from sklearn.model_selection import train_test_split as _tts
 
-def train_xgboost(X, y):
-    """Train XGBoost classifier."""
-    print("Training XGBoost ...")
-    model = xgb.XGBClassifier(
-        **{k: v for k, v in XGB_PARAMS.items() if k not in ("early_stopping_rounds",)}
-    )
-    return model, cross_validate_model(model, X, y, fit_kwargs=_eval_set_kwargs)
-
-
-def train_lightgbm(X, y):
-    """Train LightGBM classifier."""
-    print("Training LightGBM ...")
-    model = lgb.LGBMClassifier(
-        **{k: v for k, v in LGB_PARAMS.items() if k not in ("early_stopping_rounds", "verbose")}
-    )
-    return model, cross_validate_model(model, X, y, fit_kwargs=_eval_set_kwargs)
+        X_rt, X_val, y_rt, y_val = _tts(X, y, test_size=0.1, random_state=RANDOM_STATE, stratify=y)
+        _eval_set_fit(pipeline, X_rt, y_rt, X_val, y_val)
+    else:
+        pipeline.fit(X, y)
+    return pipeline
 
 
 def main():
@@ -145,49 +208,26 @@ def main():
 
     print(f"Features: {X.shape[1]}, Samples: {len(X)}, Default rate: {y.mean() * 100:.2f}%\n")
 
-    # Train all models
-    results = {}
-    models = {}
+    # Cross-validate every model (leakage-free: encoder fit per fold)
+    results = train_all(X, y)
 
-    models["logistic_regression"], results["logistic_regression"] = train_logistic_regression(X, y)
-    models["random_forest"], results["random_forest"] = train_random_forest(X, y)
-    models["xgboost"], results["xgboost"] = train_xgboost(X, y)
-    models["lightgbm"], results["lightgbm"] = train_lightgbm(X, y)
-
-    # Save best model (highest AUC) — retrain on full data
+    # Save best model (highest AUC) — retrain pipeline on full data
     best_model_name = max(results, key=lambda k: results[k]["auc_mean"])
     print(f"\nBest model: {best_model_name} (CV AUC={results[best_model_name]['auc_mean']:.4f})")
-    print(f"Retraining {best_model_name} on full training set ...")
+    print(f"Retraining {best_model_name} pipeline on full training set ...")
+    best_pipeline = retrain_best(best_model_name, X, y)
 
-    # Recreate model from scratch, then fit on full data
-    if best_model_name == "logistic_regression":
-        best_model = LogisticRegression(
-            max_iter=1000, class_weight="balanced", random_state=RANDOM_STATE, solver="lbfgs"
-        )
-        best_model.fit(X, y)
-    elif best_model_name == "random_forest":
-        best_model = RandomForestClassifier(**RF_PARAMS)
-        best_model.fit(X, y)
-    elif best_model_name == "xgboost":
-        best_model = xgb.XGBClassifier(
-            **{k: v for k, v in XGB_PARAMS.items() if k != "early_stopping_rounds"}
-        )
-        best_model.fit(X, y)
-    elif best_model_name == "lightgbm":
-        from sklearn.model_selection import train_test_split as _tts
-
-        X_rt, X_val, y_rt, y_val = _tts(X, y, test_size=0.1, random_state=RANDOM_STATE, stratify=y)
-        best_model = lgb.LGBMClassifier(
-            **{k: v for k, v in LGB_PARAMS.items() if k not in ("early_stopping_rounds", "verbose")}
-        )
-        best_model.fit(X_rt, y_rt, eval_set=[(X_val, y_val)])
-    else:
-        best_model = models[best_model_name]
-
-    # Save model in both formats for maximum compatibility
-    if hasattr(best_model, "save_model"):
-        best_model.save_model(str(MODEL_PATH.with_suffix(".json")))
-    joblib.dump(best_model, str(MODEL_PATH.with_suffix(".joblib")))
+    # Persist the full pipeline (preprocess + model) as joblib so downstream
+    # consumers (SHAP / evaluate / dashboard) reload a self-contained,
+    # leakage-free model. The native XGBoost .json no longer carries the
+    # fitted encoder, so joblib is now the single source of truth.
+    joblib.dump(best_pipeline, str(MODEL_PATH.with_suffix(".joblib")))
+    # Drop any stale .json from the previous (non-pipeline) run to avoid
+    # find_best_model_path loading an encoder-less artifact.
+    stale_json = MODEL_PATH.with_suffix(".json")
+    if stale_json.exists():
+        stale_json.unlink()
+        print(f"  Removed stale (encoder-less) checkpoint: {stale_json}")
 
     # Save results
     with open(MODEL_RESULTS_JSON, "w") as f:
@@ -198,12 +238,16 @@ def main():
                 "feature_count": X.shape[1],
                 "sample_count": len(X),
                 "default_rate": float(y.mean()),
+                "leakage_notes": {
+                    "target_encoding": "fit per CV fold via sklearn Pipeline; validation rows never encode their own target",
+                    "test_metrics": "no labeled test set available (Home Credit application_test.csv has no TARGET); report 5-fold CV AUC only",
+                },
             },
             f,
             indent=2,
         )
 
-    print(f"\nSaved model to {MODEL_PATH}")
+    print(f"\nSaved model to {MODEL_PATH}.joblib")
     print(f"Saved results to {MODEL_RESULTS_JSON}")
 
     # Print summary table

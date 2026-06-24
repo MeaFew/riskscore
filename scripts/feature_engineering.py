@@ -90,7 +90,21 @@ def compute_iv_all(
 def build_features(
     train_df: pd.DataFrame, test_df: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Full feature engineering pipeline."""
+    """Target-free feature engineering.
+
+    Only deterministic, target-independent transforms live here (ratios,
+    EXT_SOURCE interactions, one-hot for low-cardinality categoricals, and
+    dropping high-cardinality raw categoricals). Target encoding of
+    high-cardinality categoricals is deliberately **not** done here — it is
+    performed inside the model CV loop in ``train_models.py`` via a sklearn
+    ``Pipeline`` so the encoder is fit on each fold's training split only
+    (leakage-free). See H3 in the project notes.
+
+    IV-based feature selection is likewise computed only for the optional
+    analytic WOE/IV report (see ``compute_iv_report``) and is NOT used to
+    filter the training features, because selecting on IV estimated from the
+    full training target and then applying it inside CV folds leaks the target.
+    """
     print("Building features ...")
 
     train = train_df.copy()
@@ -132,63 +146,49 @@ def build_features(
             train[f"{c1}_squared"] = train[c1] ** 2
             test[f"{c1}_squared"] = test[c1] ** 2
 
-    # ── 3. Categorical encoding ────────────────────────────────────
-    cat_cols = train.select_dtypes(include=["object"]).columns.tolist()
-    print(f"  Encoding {len(cat_cols)} categorical columns ...")
+    # ── 3. Categorical handling ────────────────────────────────────
+    # One-hot encode LOW-cardinality categoricals (target-free, safe globally).
+    # HIGH-cardinality categoricals are kept raw and target-encoded inside the
+    # CV pipeline (per-fold, leakage-free). 'object' + pandas 'string' dtypes
+    # are both treated as categorical (pandas 2 vs 3/4 compatibility).
+    cat_cols = train.select_dtypes(include=["object", "string"]).columns.tolist()
+    print(f"  Categorical columns: {len(cat_cols)} (one-hot low-card, TE high-card in CV)")
 
-    # Combine for consistent encoding
-    combined = pd.concat([train, test], axis=0, ignore_index=True)
-    n_train = len(train)
-
-    for col in cat_cols:
-        # Target encoding with smoothing
-        global_mean = y.mean()
-        smoothing = 10.0
-        agg = (
-            pd.DataFrame({col: train[col], TARGET_COL: y})
-            .groupby(col)[TARGET_COL]
-            .agg(["mean", "count"])
-        )
-        agg["smooth"] = (agg["mean"] * agg["count"] + global_mean * smoothing) / (
-            agg["count"] + smoothing
-        )
-        mapping = agg["smooth"].to_dict()
-        combined[f"{col}_TE"] = combined[col].map(mapping).fillna(global_mean)
-
-    # One-hot for low-cardinality
     low_card = [c for c in cat_cols if train[c].nunique() <= 5]
-    remaining_cat = [c for c in cat_cols if c not in low_card]
+    high_card = [c for c in cat_cols if c not in low_card]
+
+    # One-hot for low-cardinality (deterministic, target-free)
     if low_card:
+        combined = pd.concat([train, test], axis=0, ignore_index=True)
         combined = pd.get_dummies(combined, columns=low_card, drop_first=True)
+        n_train = len(train)
+        train = combined.iloc[:n_train].copy()
+        test = combined.iloc[n_train:].copy()
 
-    # Drop remaining original categoricals
-    combined = combined.drop(columns=remaining_cat)
+    # Record high-card columns so train_models can target-encode them in-CV.
+    # We keep them in the frame (train_models consumes them as the TE source).
+    train.attrs["te_columns"] = high_card
+    test.attrs["te_columns"] = high_card
 
-    # ── 4. IV-based feature selection ──────────────────────────────
-    numeric_cols = combined.select_dtypes(include=[np.number]).columns.tolist()
-    numeric_cols = [c for c in numeric_cols if c not in ("SK_ID_CURR",)]
-
-    print(f"  Computing IV for {len(numeric_cols)} numeric features ...")
-    combined_train = combined.iloc[:n_train].copy()
-    combined_train[TARGET_COL] = y.values
-
-    iv_df = compute_iv_all(combined_train, numeric_cols, TARGET_COL)
-    selected_features = iv_df[iv_df["iv"] >= IV_THRESHOLD]["feature"].tolist()
-    print(
-        f"  Selected {len(selected_features)} / {len(numeric_cols)} features (IV >= {IV_THRESHOLD})"
-    )
-    print(f"  Top 5 by IV: {iv_df.head(5).to_dict('records')}")
-
-    # Keep SK_ID_CURR + selected + target
-    keep_cols = ["SK_ID_CURR"] + selected_features
-    if TARGET_COL in combined.columns:
-        keep_cols.append(TARGET_COL)
-
-    train_out = combined.iloc[:n_train][keep_cols].copy()
-    test_out = combined.iloc[n_train:][keep_cols].copy()
+    train_out = train.copy()
+    test_out = test.copy()
     train_out[TARGET_COL] = y.values
 
     return train_out, test_out
+
+
+def compute_iv_report(train_df: pd.DataFrame, target: str = TARGET_COL) -> pd.DataFrame:
+    """Compute the WOE/IV analytic report on the full training set.
+
+    This is for **interpretation/reporting only** — it is NOT used to select
+    features for modeling, because doing so would leak the target into the CV
+    folds that selected those features. Use it to document which features are
+    informative, not to filter the model's feature matrix.
+    """
+    numeric_cols = train_df.select_dtypes(include=[np.number]).columns.tolist()
+    numeric_cols = [c for c in numeric_cols if c not in ("SK_ID_CURR", target)]
+    iv_df = compute_iv_all(train_df, numeric_cols, target)
+    return iv_df
 
 
 def main():
@@ -209,6 +209,22 @@ def main():
 
     print(f"\nSaved: {FEATURES_TRAIN_CSV} ({train_features.shape})")
     print(f"Saved: {FEATURES_TEST_CSV} ({test_features.shape})")
+
+    # Analytic WOE/IV report (interpretation only — NOT used for feature
+    # selection, which would leak the target into CV folds).
+    try:
+        iv_df = compute_iv_report(train_features)
+        iv_path = PROCESSED_DATA_DIR / "iv_report.csv"
+        iv_df.to_csv(iv_path, index=False)
+        selected = int((iv_df["iv"] >= IV_THRESHOLD).sum())
+        print(
+            f"  IV report: {len(iv_df)} features, "
+            f"{selected} with IV >= {IV_THRESHOLD} (reference only, not used for selection)"
+        )
+        print(f"  Saved IV report: {iv_path}")
+        print(f"  Top 5 by IV: {iv_df.head(5).to_dict('records')}")
+    except Exception as e:  # noqa: BLE001 — reporting only, must not break the pipeline
+        warnings.warn(f"IV report generation failed (non-fatal): {e}", RuntimeWarning)
 
 
 if __name__ == "__main__":
